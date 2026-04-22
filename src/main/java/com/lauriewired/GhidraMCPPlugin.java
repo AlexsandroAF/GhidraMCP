@@ -40,9 +40,20 @@ import ghidra.program.model.data.DataType;
 import ghidra.program.model.data.DataTypeManager;
 import ghidra.program.model.data.PointerDataType;
 import ghidra.program.model.data.Undefined1DataType;
+import ghidra.program.model.data.StructureDataType;
+import ghidra.program.model.data.EnumDataType;
+import ghidra.program.model.data.TypedefDataType;
+import ghidra.program.model.data.CategoryPath;
+import ghidra.program.model.data.DataTypeConflictHandler;
+import ghidra.program.model.mem.Memory;
+import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.listing.Variable;
 import ghidra.app.decompiler.component.DecompilerUtils;
 import ghidra.app.decompiler.ClangToken;
+import ghidra.app.decompiler.ClangTokenGroup;
+import ghidra.app.decompiler.ClangLine;
+import ghidra.program.model.pcode.PcodeOp;
+import ghidra.program.model.pcode.PcodeOpAST;
 import ghidra.framework.options.Options;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -71,6 +82,8 @@ public class GhidraMCPPlugin extends Plugin {
     private static final String OPTION_CATEGORY_NAME = "GhidraMCP HTTP Server";
     private static final String PORT_OPTION_NAME = "Server Port";
     private static final int DEFAULT_PORT = 8080;
+    private static final int MAX_LIMIT = 10000;
+    private static final int MAX_READ_BYTES = 4096;
 
     public GhidraMCPPlugin(PluginTool tool) {
         super(tool);
@@ -110,14 +123,14 @@ public class GhidraMCPPlugin extends Plugin {
         server.createContext("/methods", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit  = parseIntOrDefault(qparams.get("limit"),  100);
+            int limit  = parseLimitOrDefault(qparams.get("limit"),  100);
             sendResponse(exchange, getAllFunctionNames(offset, limit));
         });
 
         server.createContext("/classes", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit  = parseIntOrDefault(qparams.get("limit"),  100);
+            int limit  = parseLimitOrDefault(qparams.get("limit"),  100);
             sendResponse(exchange, getAllClassNames(offset, limit));
         });
 
@@ -151,35 +164,35 @@ public class GhidraMCPPlugin extends Plugin {
         server.createContext("/segments", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit  = parseIntOrDefault(qparams.get("limit"),  100);
+            int limit  = parseLimitOrDefault(qparams.get("limit"),  100);
             sendResponse(exchange, listSegments(offset, limit));
         });
 
         server.createContext("/imports", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit  = parseIntOrDefault(qparams.get("limit"),  100);
+            int limit  = parseLimitOrDefault(qparams.get("limit"),  100);
             sendResponse(exchange, listImports(offset, limit));
         });
 
         server.createContext("/exports", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit  = parseIntOrDefault(qparams.get("limit"),  100);
+            int limit  = parseLimitOrDefault(qparams.get("limit"),  100);
             sendResponse(exchange, listExports(offset, limit));
         });
 
         server.createContext("/namespaces", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit  = parseIntOrDefault(qparams.get("limit"),  100);
+            int limit  = parseLimitOrDefault(qparams.get("limit"),  100);
             sendResponse(exchange, listNamespaces(offset, limit));
         });
 
         server.createContext("/data", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit  = parseIntOrDefault(qparams.get("limit"),  100);
+            int limit  = parseLimitOrDefault(qparams.get("limit"),  100);
             sendResponse(exchange, listDefinedData(offset, limit));
         });
 
@@ -187,7 +200,7 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> qparams = parseQueryParams(exchange);
             String searchTerm = qparams.get("query");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
             sendResponse(exchange, searchFunctionsByName(searchTerm, offset, limit));
         });
 
@@ -313,7 +326,7 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
             sendResponse(exchange, getXrefsTo(address, offset, limit));
         });
 
@@ -321,7 +334,7 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
             sendResponse(exchange, getXrefsFrom(address, offset, limit));
         });
 
@@ -329,16 +342,129 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> qparams = parseQueryParams(exchange);
             String name = qparams.get("name");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
             sendResponse(exchange, getFunctionXrefs(name, offset, limit));
         });
 
         server.createContext("/strings", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
             String filter = qparams.get("filter");
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
+        });
+
+        // ---- Labels ----
+
+        server.createContext("/create_label", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            sendResponse(exchange, createLabel(params.get("address"), params.get("name")));
+        });
+
+        server.createContext("/remove_label", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            sendResponse(exchange, removeLabel(params.get("address"), params.get("name")));
+        });
+
+        server.createContext("/list_labels", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
+            String filter = qparams.get("filter");
+            sendResponse(exchange, listLabels(offset, limit, filter));
+        });
+
+        // ---- Bookmarks ----
+
+        server.createContext("/set_bookmark", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            sendResponse(exchange, setBookmark(
+                params.get("address"), params.get("category"), params.get("comment")));
+        });
+
+        server.createContext("/remove_bookmark", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            sendResponse(exchange, removeBookmark(params.get("address"), params.get("category")));
+        });
+
+        server.createContext("/list_bookmarks", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
+            String category = qparams.get("category");
+            sendResponse(exchange, listBookmarks(offset, limit, category));
+        });
+
+        // ---- Raw memory ----
+
+        server.createContext("/read_bytes", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            int length = parseIntOrDefault(qparams.get("length"), 16);
+            String format = qparams.get("format");
+            sendResponse(exchange, readBytes(address, length, format));
+        });
+
+        // ---- Decompiler output with address mapping + P-code ----
+
+        server.createContext("/decompile_with_map", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            sendResponse(exchange, decompileWithAddressMap(qparams.get("address"), qparams.get("name")));
+        });
+
+        server.createContext("/get_high_pcode", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            sendResponse(exchange, getHighPcode(qparams.get("address")));
+        });
+
+        server.createContext("/get_pcode", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            int length = parseIntOrDefault(qparams.get("length"), 0);
+            sendResponse(exchange, getLowPcode(address, length));
+        });
+
+        // ---- Data types (structs, enums, typedefs) ----
+
+        server.createContext("/list_data_types", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
+            sendResponse(exchange, listDataTypes(offset, limit,
+                qparams.get("category"), qparams.get("filter")));
+        });
+
+        server.createContext("/get_data_type", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            sendResponse(exchange, getDataTypeDefinition(qparams.get("name")));
+        });
+
+        server.createContext("/create_struct", exchange -> {
+            String body = readBody(exchange);
+            sendResponse(exchange, createStructFromJson(body));
+        });
+
+        server.createContext("/create_enum", exchange -> {
+            String body = readBody(exchange);
+            sendResponse(exchange, createEnumFromJson(body));
+        });
+
+        server.createContext("/create_typedef", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            sendResponse(exchange, createTypedef(
+                params.get("name"), params.get("targetType"), params.get("category")));
+        });
+
+        server.createContext("/apply_data_type", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            boolean clear = "true".equalsIgnoreCase(params.get("clear_existing"));
+            sendResponse(exchange, applyDataType(
+                params.get("address"), params.get("type_name"), clear));
+        });
+
+        server.createContext("/delete_data_type", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            sendResponse(exchange, deleteDataType(params.get("name")));
         });
 
         server.setExecutor(null);
@@ -494,19 +620,23 @@ public class GhidraMCPPlugin extends Plugin {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
         DecompInterface decomp = new DecompInterface();
-        decomp.openProgram(program);
-        for (Function func : program.getFunctionManager().getFunctions(true)) {
-            if (func.getName().equals(name)) {
-                DecompileResults result =
-                    decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
-                if (result != null && result.decompileCompleted()) {
-                    return result.getDecompiledFunction().getC();
-                } else {
-                    return "Decompilation failed";
+        try {
+            decomp.openProgram(program);
+            for (Function func : program.getFunctionManager().getFunctions(true)) {
+                if (func.getName().equals(name)) {
+                    DecompileResults result =
+                        decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
+                    if (result != null && result.decompileCompleted()) {
+                        return result.getDecompiledFunction().getC();
+                    } else {
+                        return "Decompilation failed";
+                    }
                 }
             }
+            return "Function not found";
+        } finally {
+            decomp.dispose();
         }
-        return "Function not found";
     }
 
     private boolean renameFunction(String oldName, String newName) {
@@ -579,88 +709,92 @@ public class GhidraMCPPlugin extends Plugin {
         if (program == null) return "No program loaded";
 
         DecompInterface decomp = new DecompInterface();
-        decomp.openProgram(program);
-
-        Function func = null;
-        for (Function f : program.getFunctionManager().getFunctions(true)) {
-            if (f.getName().equals(functionName)) {
-                func = f;
-                break;
-            }
-        }
-
-        if (func == null) {
-            return "Function not found";
-        }
-
-        DecompileResults result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
-        if (result == null || !result.decompileCompleted()) {
-            return "Decompilation failed";
-        }
-
-        HighFunction highFunction = result.getHighFunction();
-        if (highFunction == null) {
-            return "Decompilation failed (no high function)";
-        }
-
-        LocalSymbolMap localSymbolMap = highFunction.getLocalSymbolMap();
-        if (localSymbolMap == null) {
-            return "Decompilation failed (no local symbol map)";
-        }
-
-        HighSymbol highSymbol = null;
-        Iterator<HighSymbol> symbols = localSymbolMap.getSymbols();
-        while (symbols.hasNext()) {
-            HighSymbol symbol = symbols.next();
-            String symbolName = symbol.getName();
-            
-            if (symbolName.equals(oldVarName)) {
-                highSymbol = symbol;
-            }
-            if (symbolName.equals(newVarName)) {
-                return "Error: A variable with name '" + newVarName + "' already exists in this function";
-            }
-        }
-
-        if (highSymbol == null) {
-            return "Variable not found";
-        }
-
-        boolean commitRequired = checkFullCommit(highSymbol, highFunction);
-
-        final HighSymbol finalHighSymbol = highSymbol;
-        final Function finalFunction = func;
-        AtomicBoolean successFlag = new AtomicBoolean(false);
-
         try {
-            SwingUtilities.invokeAndWait(() -> {           
-                int tx = program.startTransaction("Rename variable");
-                try {
-                    if (commitRequired) {
-                        HighFunctionDBUtil.commitParamsToDatabase(highFunction, false,
-                            ReturnCommitOption.NO_COMMIT, finalFunction.getSignatureSource());
+            decomp.openProgram(program);
+
+            Function func = null;
+            for (Function f : program.getFunctionManager().getFunctions(true)) {
+                if (f.getName().equals(functionName)) {
+                    func = f;
+                    break;
+                }
+            }
+
+            if (func == null) {
+                return "Function not found";
+            }
+
+            DecompileResults result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
+            if (result == null || !result.decompileCompleted()) {
+                return "Decompilation failed";
+            }
+
+            HighFunction highFunction = result.getHighFunction();
+            if (highFunction == null) {
+                return "Decompilation failed (no high function)";
+            }
+
+            LocalSymbolMap localSymbolMap = highFunction.getLocalSymbolMap();
+            if (localSymbolMap == null) {
+                return "Decompilation failed (no local symbol map)";
+            }
+
+            HighSymbol highSymbol = null;
+            Iterator<HighSymbol> symbols = localSymbolMap.getSymbols();
+            while (symbols.hasNext()) {
+                HighSymbol symbol = symbols.next();
+                String symbolName = symbol.getName();
+
+                if (symbolName.equals(oldVarName)) {
+                    highSymbol = symbol;
+                }
+                if (symbolName.equals(newVarName)) {
+                    return "Error: A variable with name '" + newVarName + "' already exists in this function";
+                }
+            }
+
+            if (highSymbol == null) {
+                return "Variable not found";
+            }
+
+            boolean commitRequired = checkFullCommit(highSymbol, highFunction);
+
+            final HighSymbol finalHighSymbol = highSymbol;
+            final Function finalFunction = func;
+            AtomicBoolean successFlag = new AtomicBoolean(false);
+
+            try {
+                SwingUtilities.invokeAndWait(() -> {
+                    int tx = program.startTransaction("Rename variable");
+                    try {
+                        if (commitRequired) {
+                            HighFunctionDBUtil.commitParamsToDatabase(highFunction, false,
+                                ReturnCommitOption.NO_COMMIT, finalFunction.getSignatureSource());
+                        }
+                        HighFunctionDBUtil.updateDBVariable(
+                            finalHighSymbol,
+                            newVarName,
+                            null,
+                            SourceType.USER_DEFINED
+                        );
+                        successFlag.set(true);
                     }
-                    HighFunctionDBUtil.updateDBVariable(
-                        finalHighSymbol,
-                        newVarName,
-                        null,
-                        SourceType.USER_DEFINED
-                    );
-                    successFlag.set(true);
-                }
-                catch (Exception e) {
-                    Msg.error(this, "Failed to rename variable", e);
-                }
-                finally {
-                    successFlag.set(program.endTransaction(tx, true));
-                }
-            });
-        } catch (InterruptedException | InvocationTargetException e) {
-            String errorMsg = "Failed to execute rename on Swing thread: " + e.getMessage();
-            Msg.error(this, errorMsg, e);
-            return errorMsg;
+                    catch (Exception e) {
+                        Msg.error(this, "Failed to rename variable", e);
+                    }
+                    finally {
+                        successFlag.set(program.endTransaction(tx, true));
+                    }
+                });
+            } catch (InterruptedException | InvocationTargetException e) {
+                String errorMsg = "Failed to execute rename on Swing thread: " + e.getMessage();
+                Msg.error(this, errorMsg, e);
+                return errorMsg;
+            }
+            return successFlag.get() ? "Variable renamed" : "Failed to rename variable";
+        } finally {
+            decomp.dispose();
         }
-        return successFlag.get() ? "Variable renamed" : "Failed to rename variable";
     }
 
     /**
@@ -805,12 +939,16 @@ public class GhidraMCPPlugin extends Plugin {
             if (func == null) return "No function found at or containing address " + addressStr;
 
             DecompInterface decomp = new DecompInterface();
-            decomp.openProgram(program);
-            DecompileResults result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
+            try {
+                decomp.openProgram(program);
+                DecompileResults result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
 
-            return (result != null && result.decompileCompleted()) 
-                ? result.getDecompiledFunction().getC() 
-                : "Decompilation failed";
+                return (result != null && result.decompileCompleted())
+                    ? result.getDecompiledFunction().getC()
+                    : "Decompilation failed";
+            } finally {
+                decomp.dispose();
+            }
         } catch (Exception e) {
             return "Error decompiling function: " + e.getMessage();
         }
@@ -1200,23 +1338,24 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     /**
-     * Decompile a function and return the results
+     * Decompile a function and return the results.
+     * DecompInterface is disposed before returning; the returned DecompileResults
+     * (and its HighFunction) are already materialized and remain valid for the caller.
      */
     private DecompileResults decompileFunction(Function func, Program program) {
-        // Set up decompiler for accessing the decompiled function
         DecompInterface decomp = new DecompInterface();
-        decomp.openProgram(program);
-        decomp.setSimplificationStyle("decompile"); // Full decompilation
-
-        // Decompile the function
-        DecompileResults results = decomp.decompileFunction(func, 60, new ConsoleTaskMonitor());
-
-        if (!results.decompileCompleted()) {
-            Msg.error(this, "Could not decompile function: " + results.getErrorMessage());
-            return null;
+        try {
+            decomp.openProgram(program);
+            decomp.setSimplificationStyle("decompile");
+            DecompileResults results = decomp.decompileFunction(func, 60, new ConsoleTaskMonitor());
+            if (!results.decompileCompleted()) {
+                Msg.error(this, "Could not decompile function: " + results.getErrorMessage());
+                return null;
+            }
+            return results;
+        } finally {
+            decomp.dispose();
         }
-
-        return results;
     }
 
     /**
@@ -1528,6 +1667,874 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     // ----------------------------------------------------------------------------------
+    // Labels, bookmarks, raw memory
+    // ----------------------------------------------------------------------------------
+
+    /**
+     * Create a USER_DEFINED label at the given address.
+     */
+    private String createLabel(String addressStr, String name) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+        if (name == null || name.isEmpty()) return "Name is required";
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder err = new StringBuilder();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Create label");
+                try {
+                    Address addr = program.getAddressFactory().getAddress(addressStr);
+                    if (addr == null) {
+                        err.append("Invalid address: ").append(addressStr);
+                        return;
+                    }
+                    program.getSymbolTable().createLabel(addr, name, SourceType.USER_DEFINED);
+                    success.set(true);
+                } catch (Exception e) {
+                    err.append(e.getMessage());
+                    Msg.error(this, "Create label error", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute on Swing thread: " + e.getMessage();
+        }
+        return success.get() ? "Label created" : ("Failed to create label: " + err);
+    }
+
+    /**
+     * Remove a label at the given address. If name is provided, only a matching symbol is deleted;
+     * otherwise the primary label at that address is removed.
+     */
+    private String removeLabel(String addressStr, String name) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder err = new StringBuilder();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Remove label");
+                try {
+                    Address addr = program.getAddressFactory().getAddress(addressStr);
+                    if (addr == null) {
+                        err.append("Invalid address: ").append(addressStr);
+                        return;
+                    }
+                    SymbolTable symTable = program.getSymbolTable();
+                    Symbol target = null;
+                    if (name != null && !name.isEmpty()) {
+                        for (Symbol s : symTable.getSymbols(addr)) {
+                            if (name.equals(s.getName())) {
+                                target = s;
+                                break;
+                            }
+                        }
+                        if (target == null) {
+                            err.append("No symbol '").append(name).append("' at ").append(addressStr);
+                            return;
+                        }
+                    } else {
+                        target = symTable.getPrimarySymbol(addr);
+                        if (target == null) {
+                            err.append("No symbol at ").append(addressStr);
+                            return;
+                        }
+                    }
+                    if (target.getSource() == SourceType.DEFAULT) {
+                        err.append("Cannot remove default (auto-generated) symbol");
+                        return;
+                    }
+                    success.set(target.delete());
+                } catch (Exception e) {
+                    err.append(e.getMessage());
+                    Msg.error(this, "Remove label error", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute on Swing thread: " + e.getMessage();
+        }
+        return success.get() ? "Label removed" : ("Failed to remove label: " + err);
+    }
+
+    /**
+     * List user-meaningful labels (functions, labels, code symbols). Filter is case-insensitive substring.
+     */
+    private String listLabels(int offset, int limit, String filter) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        List<String> lines = new ArrayList<>();
+        SymbolIterator it = program.getSymbolTable().getSymbolIterator(true);
+        String filterLc = (filter == null || filter.isEmpty()) ? null : filter.toLowerCase();
+        while (it.hasNext()) {
+            Symbol s = it.next();
+            SymbolType t = s.getSymbolType();
+            if (t != SymbolType.LABEL && t != SymbolType.FUNCTION) continue;
+            if (s.isDynamic()) continue;
+            String name = s.getName();
+            if (filterLc != null && !name.toLowerCase().contains(filterLc)) continue;
+            lines.add(String.format("%s @ %s [%s]", name, s.getAddress(), t.toString()));
+        }
+        return paginateList(lines, offset, limit);
+    }
+
+    /**
+     * Set (or overwrite) a "Note"-type bookmark at an address under the given category.
+     */
+    private String setBookmark(String addressStr, String category, String comment) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+        if (category == null) category = "";
+        final String finalCategory = category;
+        final String finalComment = comment == null ? "" : comment;
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder err = new StringBuilder();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Set bookmark");
+                try {
+                    Address addr = program.getAddressFactory().getAddress(addressStr);
+                    if (addr == null) {
+                        err.append("Invalid address: ").append(addressStr);
+                        return;
+                    }
+                    program.getBookmarkManager().setBookmark(
+                        addr, BookmarkType.NOTE, finalCategory, finalComment);
+                    success.set(true);
+                } catch (Exception e) {
+                    err.append(e.getMessage());
+                    Msg.error(this, "Set bookmark error", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute on Swing thread: " + e.getMessage();
+        }
+        return success.get() ? "Bookmark set" : ("Failed to set bookmark: " + err);
+    }
+
+    /**
+     * Remove a Note bookmark matching the given category at the address.
+     */
+    private String removeBookmark(String addressStr, String category) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+        final String finalCategory = category == null ? "" : category;
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder err = new StringBuilder();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Remove bookmark");
+                try {
+                    Address addr = program.getAddressFactory().getAddress(addressStr);
+                    if (addr == null) {
+                        err.append("Invalid address: ").append(addressStr);
+                        return;
+                    }
+                    BookmarkManager bm = program.getBookmarkManager();
+                    Bookmark bookmark = bm.getBookmark(addr, BookmarkType.NOTE, finalCategory);
+                    if (bookmark == null) {
+                        err.append("No bookmark at ").append(addressStr)
+                           .append(" with category '").append(finalCategory).append("'");
+                        return;
+                    }
+                    bm.removeBookmark(bookmark);
+                    success.set(true);
+                } catch (Exception e) {
+                    err.append(e.getMessage());
+                    Msg.error(this, "Remove bookmark error", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute on Swing thread: " + e.getMessage();
+        }
+        return success.get() ? "Bookmark removed" : ("Failed to remove bookmark: " + err);
+    }
+
+    /**
+     * List Note bookmarks. When category is provided, only matching entries are returned.
+     */
+    private String listBookmarks(int offset, int limit, String category) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        List<String> lines = new ArrayList<>();
+        BookmarkManager bm = program.getBookmarkManager();
+        Iterator<Bookmark> it = bm.getBookmarksIterator(BookmarkType.NOTE);
+        while (it.hasNext()) {
+            Bookmark b = it.next();
+            if (category != null && !category.isEmpty() && !category.equals(b.getCategory())) continue;
+            lines.add(String.format("%s [%s] %s",
+                b.getAddress(),
+                b.getCategory() == null ? "" : b.getCategory(),
+                escapeNonAscii(b.getComment() == null ? "" : b.getComment())));
+        }
+        return paginateList(lines, offset, limit);
+    }
+
+    /**
+     * Read raw bytes from memory. Length is capped at MAX_READ_BYTES to protect MCP context.
+     * format: "hex" (default) or "base64".
+     */
+    private String readBytes(String addressStr, int length, String format) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+        if (length <= 0) return "Length must be positive";
+        if (length > MAX_READ_BYTES) {
+            return "Length exceeds max of " + MAX_READ_BYTES + "; issue multiple calls with different addresses";
+        }
+
+        try {
+            Address addr = program.getAddressFactory().getAddress(addressStr);
+            if (addr == null) return "Invalid address: " + addressStr;
+
+            byte[] buf = new byte[length];
+            Memory mem = program.getMemory();
+            int n = mem.getBytes(addr, buf);
+            String effectiveFmt = (format == null || format.isEmpty()) ? "hex" : format.toLowerCase();
+
+            if ("base64".equals(effectiveFmt)) {
+                byte[] slice = (n == length) ? buf : Arrays.copyOf(buf, n);
+                return Base64.getEncoder().encodeToString(slice);
+            }
+            // default hex
+            StringBuilder sb = new StringBuilder(n * 2);
+            for (int i = 0; i < n; i++) {
+                sb.append(String.format("%02x", buf[i] & 0xFF));
+            }
+            return sb.toString();
+        } catch (MemoryAccessException e) {
+            return "Memory access error: " + e.getMessage();
+        } catch (Exception e) {
+            return "Error reading bytes: " + e.getMessage();
+        }
+    }
+
+    // ----------------------------------------------------------------------------------
+    // Decompiler output with address mapping + P-code
+    // ----------------------------------------------------------------------------------
+
+    /**
+     * Resolve a function from either an address string or a function name. Caller passes
+     * at least one; address takes precedence when both are provided.
+     */
+    private Function resolveFunction(Program program, String addressStr, String name) {
+        if (addressStr != null && !addressStr.isEmpty()) {
+            Address addr = program.getAddressFactory().getAddress(addressStr);
+            if (addr == null) return null;
+            return getFunctionForAddress(program, addr);
+        }
+        if (name != null && !name.isEmpty()) {
+            for (Function f : program.getFunctionManager().getFunctions(true)) {
+                if (f.getName().equals(name)) return f;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Decompile a function and emit each source line prefixed with the minimum address
+     * of its tokens. Enables the client to comment/rename at the correct location without
+     * a second disassembly round-trip.
+     */
+    private String decompileWithAddressMap(String addressStr, String name) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        Function func = resolveFunction(program, addressStr, name);
+        if (func == null) return "Function not found";
+
+        DecompileResults results = decompileFunction(func, program);
+        if (results == null) return "Decompilation failed";
+
+        ClangTokenGroup root = results.getCCodeMarkup();
+        if (root == null) return "No C code markup available";
+
+        List<ClangLine> lines = DecompilerUtils.toLines(root);
+        StringBuilder out = new StringBuilder();
+        for (ClangLine line : lines) {
+            Address minAddr = null;
+            StringBuilder text = new StringBuilder();
+            for (int i = 0; i < line.getIndent(); i++) text.append(' ');
+            int numTokens = line.getNumTokens();
+            for (int i = 0; i < numTokens; i++) {
+                ClangToken tok = line.getToken(i);
+                Address a = tok.getMinAddress();
+                if (a != null && (minAddr == null || a.compareTo(minAddr) < 0)) {
+                    minAddr = a;
+                }
+                String s = tok.getText();
+                if (s != null) text.append(s);
+            }
+            out.append(minAddr != null ? minAddr.toString() : "        ")
+               .append(" | ")
+               .append(text)
+               .append('\n');
+        }
+        return out.toString();
+    }
+
+    /**
+     * Dump the high P-code operations (post-decompilation IR) for a function.
+     * Produces one op per line, prefixed with the op's sequence address.
+     */
+    private String getHighPcode(String addressStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        Function func = resolveFunction(program, addressStr, null);
+        if (func == null) return "No function found at or containing address " + addressStr;
+
+        DecompileResults results = decompileFunction(func, program);
+        if (results == null) return "Decompilation failed";
+
+        HighFunction high = results.getHighFunction();
+        if (high == null) return "No high function available";
+
+        StringBuilder out = new StringBuilder();
+        Iterator<PcodeOpAST> ops = high.getPcodeOps();
+        while (ops.hasNext()) {
+            PcodeOpAST op = ops.next();
+            Address opAddr = op.getSeqnum() != null ? op.getSeqnum().getTarget() : null;
+            out.append(opAddr != null ? opAddr.toString() : "        ")
+               .append(": ")
+               .append(op.toString())
+               .append('\n');
+        }
+        return out.length() == 0 ? "No P-code ops emitted" : out.toString();
+    }
+
+    /**
+     * Dump raw (low-level) P-code for instructions. If length > 0, iterate N instructions
+     * starting at address; otherwise walk the function body containing that address.
+     */
+    private String getLowPcode(String addressStr, int length) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+
+        try {
+            Address addr = program.getAddressFactory().getAddress(addressStr);
+            if (addr == null) return "Invalid address: " + addressStr;
+
+            Listing listing = program.getListing();
+            StringBuilder out = new StringBuilder();
+            int count = 0;
+
+            if (length > 0) {
+                InstructionIterator it = listing.getInstructions(addr, true);
+                while (it.hasNext() && count < length) {
+                    appendPcodeForInstruction(out, it.next());
+                    count++;
+                }
+            } else {
+                Function func = getFunctionForAddress(program, addr);
+                if (func == null) return "No function at or containing address " + addressStr
+                    + " (pass length=N to walk N instructions instead)";
+                Address end = func.getBody().getMaxAddress();
+                InstructionIterator it = listing.getInstructions(func.getEntryPoint(), true);
+                while (it.hasNext()) {
+                    Instruction instr = it.next();
+                    if (instr.getAddress().compareTo(end) > 0) break;
+                    appendPcodeForInstruction(out, instr);
+                }
+            }
+            return out.length() == 0 ? "No P-code emitted" : out.toString();
+        } catch (Exception e) {
+            return "Error getting P-code: " + e.getMessage();
+        }
+    }
+
+    private void appendPcodeForInstruction(StringBuilder out, Instruction instr) {
+        PcodeOp[] ops = instr.getPcode();
+        if (ops == null || ops.length == 0) {
+            out.append(instr.getAddress()).append(": (no pcode)\n");
+            return;
+        }
+        for (PcodeOp op : ops) {
+            out.append(instr.getAddress()).append(": ").append(op.toString()).append('\n');
+        }
+    }
+
+    // ----------------------------------------------------------------------------------
+    // Data types: list, define, create (struct/enum/typedef), apply, delete
+    // ----------------------------------------------------------------------------------
+
+    private CategoryPath toCategoryPath(String category) {
+        if (category == null || category.isEmpty()) return CategoryPath.ROOT;
+        return new CategoryPath(category.startsWith("/") ? category : ("/" + category));
+    }
+
+    private String listDataTypes(int offset, int limit, String category, String filter) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        String catLc = (category == null || category.isEmpty()) ? null : category.toLowerCase();
+        String filtLc = (filter == null || filter.isEmpty()) ? null : filter.toLowerCase();
+
+        List<String> lines = new ArrayList<>();
+        Iterator<DataType> it = program.getDataTypeManager().getAllDataTypes();
+        while (it.hasNext()) {
+            DataType dt = it.next();
+            String path = dt.getPathName();
+            String name = dt.getName();
+            if (catLc != null && !path.toLowerCase().contains(catLc)) continue;
+            if (filtLc != null && !name.toLowerCase().contains(filtLc)) continue;
+            int len = -1;
+            try { len = dt.getLength(); } catch (Exception ignored) {}
+            lines.add(String.format("%s (size=%s)", path, len >= 0 ? Integer.toString(len) : "?"));
+        }
+        Collections.sort(lines);
+        return paginateList(lines, offset, limit);
+    }
+
+    private String getDataTypeDefinition(String name) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (name == null || name.isEmpty()) return "Name is required";
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        DataType dt = findDataTypeByNameInAllCategories(dtm, name);
+        if (dt == null) return "Data type not found: " + name;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("path: ").append(dt.getPathName()).append('\n');
+        sb.append("size: ").append(safeLen(dt)).append('\n');
+
+        if (dt instanceof ghidra.program.model.data.Structure) {
+            ghidra.program.model.data.Structure st = (ghidra.program.model.data.Structure) dt;
+            sb.append("struct ").append(st.getName()).append(" {\n");
+            for (ghidra.program.model.data.DataTypeComponent c : st.getDefinedComponents()) {
+                sb.append(String.format("  %d: %s %s",
+                    c.getOffset(),
+                    c.getDataType().getName(),
+                    c.getFieldName() != null ? c.getFieldName() : ("field_" + c.getOrdinal())));
+                if (c.getComment() != null && !c.getComment().isEmpty()) {
+                    sb.append("  // ").append(c.getComment());
+                }
+                sb.append('\n');
+            }
+            sb.append("}\n");
+        } else if (dt instanceof ghidra.program.model.data.Enum) {
+            ghidra.program.model.data.Enum en = (ghidra.program.model.data.Enum) dt;
+            sb.append("enum ").append(en.getName()).append(" (size=").append(en.getLength()).append(") {\n");
+            for (String vn : en.getNames()) {
+                sb.append(String.format("  %s = %d%n", vn, en.getValue(vn)));
+            }
+            sb.append("}\n");
+        } else if (dt instanceof ghidra.program.model.data.TypeDef) {
+            ghidra.program.model.data.TypeDef td = (ghidra.program.model.data.TypeDef) dt;
+            sb.append("typedef ").append(td.getDataType().getName())
+              .append(" ").append(td.getName()).append('\n');
+        } else {
+            sb.append(dt.toString()).append('\n');
+        }
+        return sb.toString();
+    }
+
+    private int safeLen(DataType dt) {
+        try { return dt.getLength(); } catch (Exception e) { return -1; }
+    }
+
+    @SuppressWarnings("unchecked")
+    private String createStructFromJson(String body) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        Object parsed;
+        try { parsed = MiniJson.parse(body); }
+        catch (Exception e) { return "Invalid JSON: " + e.getMessage(); }
+        if (!(parsed instanceof Map)) return "Expected JSON object at root";
+
+        Map<String, Object> root = (Map<String, Object>) parsed;
+        Object nameObj = root.get("name");
+        Object fieldsObj = root.get("fields");
+        if (!(nameObj instanceof String) || ((String) nameObj).isEmpty()) return "Missing 'name'";
+        if (!(fieldsObj instanceof List)) return "Missing 'fields' array";
+        final String structName = (String) nameObj;
+        final List<Object> fields = (List<Object>) fieldsObj;
+        final String category = root.get("category") instanceof String ? (String) root.get("category") : null;
+        final boolean packed = Boolean.TRUE.equals(root.get("packed"));
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder err = new StringBuilder();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Create struct " + structName);
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    StructureDataType st = new StructureDataType(toCategoryPath(category), structName, 0, dtm);
+                    if (packed) st.setToDefaultPacking();
+
+                    int idx = 0;
+                    for (Object f : fields) {
+                        if (!(f instanceof Map)) {
+                            err.append("Field ").append(idx).append(" is not an object");
+                            return;
+                        }
+                        Map<String, Object> field = (Map<String, Object>) f;
+                        Object fname = field.get("name");
+                        Object ftype = field.get("type");
+                        if (!(fname instanceof String) || !(ftype instanceof String)) {
+                            err.append("Field ").append(idx).append(" missing name or type");
+                            return;
+                        }
+                        DataType fdt = resolveDataType(dtm, (String) ftype);
+                        if (fdt == null) {
+                            err.append("Field ").append(idx).append(": unknown type ").append(ftype);
+                            return;
+                        }
+                        Object offObj = field.get("offset");
+                        if (offObj instanceof Number) {
+                            int desired = ((Number) offObj).intValue();
+                            int cur = st.getLength();
+                            if (desired < cur) {
+                                err.append("Field ").append(idx).append(": offset ")
+                                   .append(desired).append(" < current size ").append(cur);
+                                return;
+                            }
+                            if (desired > cur) st.growStructure(desired - cur);
+                        }
+                        st.add(fdt, fdt.getLength(), (String) fname, null);
+                        idx++;
+                    }
+                    dtm.addDataType(st, DataTypeConflictHandler.DEFAULT_HANDLER);
+                    success.set(true);
+                } catch (Exception e) {
+                    err.append(e.getMessage());
+                    Msg.error(this, "Create struct error", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute on Swing thread: " + e.getMessage();
+        }
+        return success.get() ? ("Struct created: " + structName) : ("Failed to create struct: " + err);
+    }
+
+    @SuppressWarnings("unchecked")
+    private String createEnumFromJson(String body) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        Object parsed;
+        try { parsed = MiniJson.parse(body); }
+        catch (Exception e) { return "Invalid JSON: " + e.getMessage(); }
+        if (!(parsed instanceof Map)) return "Expected JSON object at root";
+
+        Map<String, Object> root = (Map<String, Object>) parsed;
+        Object nameObj = root.get("name");
+        Object sizeObj = root.get("size");
+        Object valuesObj = root.get("values");
+        if (!(nameObj instanceof String) || ((String) nameObj).isEmpty()) return "Missing 'name'";
+        if (!(sizeObj instanceof Number)) return "Missing 'size' (1, 2, 4 or 8)";
+        if (!(valuesObj instanceof List)) return "Missing 'values' array";
+        final String enumName = (String) nameObj;
+        final int size = ((Number) sizeObj).intValue();
+        final List<Object> values = (List<Object>) valuesObj;
+        final String category = root.get("category") instanceof String ? (String) root.get("category") : null;
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder err = new StringBuilder();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Create enum " + enumName);
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    EnumDataType en = new EnumDataType(toCategoryPath(category), enumName, size, dtm);
+                    int idx = 0;
+                    for (Object v : values) {
+                        if (!(v instanceof Map)) {
+                            err.append("Value ").append(idx).append(" is not an object");
+                            return;
+                        }
+                        Map<String, Object> val = (Map<String, Object>) v;
+                        Object vname = val.get("name");
+                        Object vvalue = val.get("value");
+                        if (!(vname instanceof String) || !(vvalue instanceof Number)) {
+                            err.append("Value ").append(idx).append(" missing name or numeric value");
+                            return;
+                        }
+                        en.add((String) vname, ((Number) vvalue).longValue());
+                        idx++;
+                    }
+                    dtm.addDataType(en, DataTypeConflictHandler.DEFAULT_HANDLER);
+                    success.set(true);
+                } catch (Exception e) {
+                    err.append(e.getMessage());
+                    Msg.error(this, "Create enum error", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute on Swing thread: " + e.getMessage();
+        }
+        return success.get() ? ("Enum created: " + enumName) : ("Failed to create enum: " + err);
+    }
+
+    private String createTypedef(String name, String targetType, String category) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (name == null || name.isEmpty()) return "Name is required";
+        if (targetType == null || targetType.isEmpty()) return "Target type is required";
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder err = new StringBuilder();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Create typedef " + name);
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    DataType target = resolveDataType(dtm, targetType);
+                    if (target == null) {
+                        err.append("Unknown target type: ").append(targetType);
+                        return;
+                    }
+                    TypedefDataType td = new TypedefDataType(toCategoryPath(category), name, target, dtm);
+                    dtm.addDataType(td, DataTypeConflictHandler.DEFAULT_HANDLER);
+                    success.set(true);
+                } catch (Exception e) {
+                    err.append(e.getMessage());
+                    Msg.error(this, "Create typedef error", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute on Swing thread: " + e.getMessage();
+        }
+        return success.get() ? ("Typedef created: " + name) : ("Failed to create typedef: " + err);
+    }
+
+    private String applyDataType(String addressStr, String typeName, boolean clearExisting) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isEmpty()) return "Address is required";
+        if (typeName == null || typeName.isEmpty()) return "type_name is required";
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder err = new StringBuilder();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Apply data type " + typeName);
+                try {
+                    Address addr = program.getAddressFactory().getAddress(addressStr);
+                    if (addr == null) {
+                        err.append("Invalid address: ").append(addressStr);
+                        return;
+                    }
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    DataType dt = resolveDataType(dtm, typeName);
+                    if (dt == null) {
+                        err.append("Unknown type: ").append(typeName);
+                        return;
+                    }
+                    int len = dt.getLength();
+                    Listing listing = program.getListing();
+                    if (clearExisting && len > 0) {
+                        listing.clearCodeUnits(addr, addr.add(len - 1), false);
+                    }
+                    listing.createData(addr, dt);
+                    success.set(true);
+                } catch (Exception e) {
+                    err.append(e.getMessage());
+                    Msg.error(this, "Apply data type error", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute on Swing thread: " + e.getMessage();
+        }
+        return success.get()
+            ? ("Applied " + typeName + " at " + addressStr)
+            : ("Failed to apply data type: " + err + " (pass clear_existing=true to overwrite)");
+    }
+
+    private String deleteDataType(String name) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (name == null || name.isEmpty()) return "Name is required";
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder err = new StringBuilder();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Delete data type " + name);
+                try {
+                    DataTypeManager dtm = program.getDataTypeManager();
+                    DataType dt = findDataTypeByNameInAllCategories(dtm, name);
+                    if (dt == null) {
+                        err.append("Not found: ").append(name);
+                        return;
+                    }
+                    success.set(dtm.remove(dt));
+                } catch (Exception e) {
+                    err.append(e.getMessage());
+                    Msg.error(this, "Delete data type error", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to execute on Swing thread: " + e.getMessage();
+        }
+        return success.get() ? ("Deleted: " + name) : ("Failed to delete: " + err);
+    }
+
+    /**
+     * Minimal recursive-descent JSON parser. Returns null / Boolean / Long / Double /
+     * String / List<Object> / LinkedHashMap<String,Object>. Used by create_struct and
+     * create_enum, which accept objects with nested arrays. Scoped deliberately small —
+     * no streaming, no reviver, no custom numbers. Throws RuntimeException on bad input.
+     */
+    private static class MiniJson {
+        private final String s;
+        private int i;
+
+        private MiniJson(String s) { this.s = s; this.i = 0; }
+
+        static Object parse(String text) {
+            if (text == null) throw new RuntimeException("Empty body");
+            MiniJson p = new MiniJson(text);
+            p.skipWs();
+            Object v = p.parseValue();
+            p.skipWs();
+            if (p.i < p.s.length()) {
+                throw new RuntimeException("Unexpected trailing content at pos " + p.i);
+            }
+            return v;
+        }
+
+        private void skipWs() {
+            while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++;
+        }
+
+        private Object parseValue() {
+            skipWs();
+            if (i >= s.length()) throw new RuntimeException("Unexpected end of input");
+            char c = s.charAt(i);
+            if (c == '"') return parseString();
+            if (c == '{') return parseObject();
+            if (c == '[') return parseArray();
+            if (c == '-' || (c >= '0' && c <= '9')) return parseNumber();
+            if (s.startsWith("null", i))  { i += 4; return null; }
+            if (s.startsWith("true", i))  { i += 4; return Boolean.TRUE; }
+            if (s.startsWith("false", i)) { i += 5; return Boolean.FALSE; }
+            throw new RuntimeException("Unexpected char '" + c + "' at pos " + i);
+        }
+
+        private String parseString() {
+            if (s.charAt(i) != '"') throw new RuntimeException("Expected '\"' at pos " + i);
+            i++;
+            StringBuilder out = new StringBuilder();
+            while (i < s.length()) {
+                char c = s.charAt(i++);
+                if (c == '"') return out.toString();
+                if (c == '\\') {
+                    if (i >= s.length()) throw new RuntimeException("Bad escape at EOF");
+                    char e = s.charAt(i++);
+                    switch (e) {
+                        case '"': out.append('"'); break;
+                        case '\\': out.append('\\'); break;
+                        case '/': out.append('/'); break;
+                        case 'b': out.append('\b'); break;
+                        case 'f': out.append('\f'); break;
+                        case 'n': out.append('\n'); break;
+                        case 'r': out.append('\r'); break;
+                        case 't': out.append('\t'); break;
+                        case 'u':
+                            if (i + 4 > s.length()) throw new RuntimeException("Bad unicode escape");
+                            out.append((char) Integer.parseInt(s.substring(i, i + 4), 16));
+                            i += 4;
+                            break;
+                        default: throw new RuntimeException("Bad escape \\" + e);
+                    }
+                } else {
+                    out.append(c);
+                }
+            }
+            throw new RuntimeException("Unterminated string");
+        }
+
+        private Number parseNumber() {
+            int start = i;
+            if (s.charAt(i) == '-') i++;
+            while (i < s.length() && Character.isDigit(s.charAt(i))) i++;
+            boolean fp = false;
+            if (i < s.length() && s.charAt(i) == '.') {
+                fp = true; i++;
+                while (i < s.length() && Character.isDigit(s.charAt(i))) i++;
+            }
+            if (i < s.length() && (s.charAt(i) == 'e' || s.charAt(i) == 'E')) {
+                fp = true; i++;
+                if (i < s.length() && (s.charAt(i) == '+' || s.charAt(i) == '-')) i++;
+                while (i < s.length() && Character.isDigit(s.charAt(i))) i++;
+            }
+            String t = s.substring(start, i);
+            return fp ? (Number) Double.parseDouble(t) : (Number) Long.parseLong(t);
+        }
+
+        private List<Object> parseArray() {
+            if (s.charAt(i) != '[') throw new RuntimeException("Expected '['");
+            i++;
+            skipWs();
+            List<Object> out = new ArrayList<>();
+            if (i < s.length() && s.charAt(i) == ']') { i++; return out; }
+            while (true) {
+                out.add(parseValue());
+                skipWs();
+                if (i >= s.length()) throw new RuntimeException("Unterminated array");
+                char c = s.charAt(i);
+                if (c == ',') { i++; skipWs(); continue; }
+                if (c == ']') { i++; return out; }
+                throw new RuntimeException("Expected ',' or ']' at pos " + i);
+            }
+        }
+
+        private Map<String, Object> parseObject() {
+            if (s.charAt(i) != '{') throw new RuntimeException("Expected '{'");
+            i++;
+            skipWs();
+            Map<String, Object> out = new LinkedHashMap<>();
+            if (i < s.length() && s.charAt(i) == '}') { i++; return out; }
+            while (true) {
+                skipWs();
+                String key = parseString();
+                skipWs();
+                if (i >= s.length() || s.charAt(i) != ':') throw new RuntimeException("Expected ':' at pos " + i);
+                i++;
+                Object v = parseValue();
+                out.put(key, v);
+                skipWs();
+                if (i >= s.length()) throw new RuntimeException("Unterminated object");
+                char c = s.charAt(i);
+                if (c == ',') { i++; continue; }
+                if (c == '}') { i++; return out; }
+                throw new RuntimeException("Expected ',' or '}' at pos " + i);
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------------------------
     // Utility: parse query params, parse post params, pagination, etc.
     // ----------------------------------------------------------------------------------
 
@@ -1554,6 +2561,14 @@ public class GhidraMCPPlugin extends Plugin {
             }
         }
         return result;
+    }
+
+    /**
+     * Read the request body as a UTF-8 string. Used by endpoints that accept
+     * JSON (create_struct, create_enum) instead of form-encoded data.
+     */
+    private String readBody(HttpExchange exchange) throws IOException {
+        return new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
     }
 
     /**
@@ -1604,6 +2619,16 @@ public class GhidraMCPPlugin extends Plugin {
         catch (NumberFormatException e) {
             return defaultValue;
         }
+    }
+
+    /**
+     * Parse a pagination limit: defaults when null/invalid, clamped to [0, MAX_LIMIT].
+     * Prevents a client from requesting an unbounded slice that blows up MCP context.
+     */
+    private int parseLimitOrDefault(String val, int defaultValue) {
+        int v = parseIntOrDefault(val, defaultValue);
+        if (v < 0) return 0;
+        return Math.min(v, MAX_LIMIT);
     }
 
     /**

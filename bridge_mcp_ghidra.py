@@ -7,6 +7,7 @@
 # ///
 
 import sys
+import json
 import requests
 import argparse
 import logging
@@ -49,6 +50,25 @@ def safe_post(endpoint: str, data: dict | str) -> str:
             response = requests.post(url, data=data, timeout=5)
         else:
             response = requests.post(url, data=data.encode("utf-8"), timeout=5)
+        response.encoding = 'utf-8'
+        if response.ok:
+            return response.text.strip()
+        else:
+            return f"Error {response.status_code}: {response.text.strip()}"
+    except Exception as e:
+        return f"Request failed: {str(e)}"
+
+def safe_post_json(endpoint: str, payload: dict) -> str:
+    """POST with application/json body. Used for structured payloads
+    (create_struct/create_enum) where form-encoding would be awkward."""
+    try:
+        url = urljoin(ghidra_server_url, endpoint)
+        response = requests.post(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            timeout=5,
+        )
         response.encoding = 'utf-8'
         if response.ok:
             return response.text.strip()
@@ -273,12 +293,12 @@ def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
 def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list:
     """
     List all defined strings in the program with their addresses.
-    
+
     Args:
         offset: Pagination offset (default: 0)
         limit: Maximum number of strings to return (default: 2000)
         filter: Optional filter to match within string content
-        
+
     Returns:
         List of strings with their addresses
     """
@@ -286,6 +306,191 @@ def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list
     if filter:
         params["filter"] = filter
     return safe_get("strings", params)
+
+@mcp.tool()
+def create_label(address: str, name: str) -> str:
+    """
+    Create a user-defined label at the given address.
+    """
+    return safe_post("create_label", {"address": address, "name": name})
+
+@mcp.tool()
+def remove_label(address: str, name: str = "") -> str:
+    """
+    Remove a label at the given address. If name is empty, removes the primary
+    non-default symbol at that address.
+    """
+    return safe_post("remove_label", {"address": address, "name": name})
+
+@mcp.tool()
+def list_labels(offset: int = 0, limit: int = 100, filter: str = None) -> list:
+    """
+    List user-meaningful labels (functions + standalone labels). Filter is a
+    case-insensitive substring match on the symbol name.
+    """
+    params = {"offset": offset, "limit": limit}
+    if filter:
+        params["filter"] = filter
+    return safe_get("list_labels", params)
+
+@mcp.tool()
+def set_bookmark(address: str, category: str = "", comment: str = "") -> str:
+    """
+    Set a Note-type bookmark at the given address. Overwrites any existing
+    bookmark with the same category at that address.
+    """
+    return safe_post("set_bookmark", {
+        "address": address, "category": category, "comment": comment,
+    })
+
+@mcp.tool()
+def remove_bookmark(address: str, category: str = "") -> str:
+    """
+    Remove the Note-type bookmark at the address matching the given category.
+    """
+    return safe_post("remove_bookmark", {"address": address, "category": category})
+
+@mcp.tool()
+def list_bookmarks(offset: int = 0, limit: int = 100, category: str = None) -> list:
+    """
+    List Note-type bookmarks with pagination. If category is provided, only
+    bookmarks with that exact category are returned.
+    """
+    params = {"offset": offset, "limit": limit}
+    if category:
+        params["category"] = category
+    return safe_get("list_bookmarks", params)
+
+@mcp.tool()
+def read_bytes(address: str, length: int = 16, format: str = "hex") -> str:
+    """
+    Read raw bytes from memory starting at address. Length is capped at 4096
+    bytes on the server side. format: "hex" (default) or "base64".
+    """
+    return "\n".join(safe_get("read_bytes", {
+        "address": address, "length": length, "format": format,
+    }))
+
+@mcp.tool()
+def decompile_with_map(address: str = "", name: str = "") -> list:
+    """
+    Decompile a function and return each source line prefixed with the minimum
+    address among its tokens. Pass either address or name (address wins if both).
+    Lines look like: "0x401000 | void main(int argc, char **argv) {".
+    """
+    params = {}
+    if address:
+        params["address"] = address
+    if name:
+        params["name"] = name
+    return safe_get("decompile_with_map", params)
+
+@mcp.tool()
+def get_high_pcode(address: str) -> list:
+    """
+    Get the high-level (post-decompilation) P-code ops for the function at
+    or containing the given address. One op per line, prefixed with its
+    sequence address.
+    """
+    return safe_get("get_high_pcode", {"address": address})
+
+@mcp.tool()
+def get_pcode(address: str, length: int = 0) -> list:
+    """
+    Get raw P-code per instruction. If length > 0, walks N instructions from
+    the given address. If length is 0, walks the whole function body at that
+    address. Each line is "<instr_addr>: <pcode_op>".
+    """
+    return safe_get("get_pcode", {"address": address, "length": length})
+
+@mcp.tool()
+def list_data_types(offset: int = 0, limit: int = 100,
+                    category: str = None, filter: str = None) -> list:
+    """
+    List data types in the Data Type Manager. Optionally filter by category path
+    substring and/or name substring.
+    """
+    params = {"offset": offset, "limit": limit}
+    if category:
+        params["category"] = category
+    if filter:
+        params["filter"] = filter
+    return safe_get("list_data_types", params)
+
+@mcp.tool()
+def get_data_type(name: str) -> str:
+    """
+    Dump a readable definition of a data type (struct layout, enum values,
+    typedef target, or default toString).
+    """
+    return "\n".join(safe_get("get_data_type", {"name": name}))
+
+@mcp.tool()
+def create_struct(name: str, fields: list,
+                  category: str = None, packed: bool = False) -> str:
+    """
+    Create a struct in the Data Type Manager.
+
+    Args:
+        name: struct name (required).
+        fields: list of {"name": str, "type": str, "offset"?: int}. Types use
+            the same syntax as set_local_variable_type (e.g. "int", "char*",
+            "P void", or any type already in the DTM). If "offset" is given,
+            padding is inserted; offset must be >= current struct size.
+        category: optional "/Cat/SubCat" category path (default: root).
+        packed: if true, applies default packing.
+    """
+    payload = {"name": name, "fields": fields}
+    if category:
+        payload["category"] = category
+    if packed:
+        payload["packed"] = True
+    return safe_post_json("create_struct", payload)
+
+@mcp.tool()
+def create_enum(name: str, size: int, values: list, category: str = None) -> str:
+    """
+    Create an enum in the Data Type Manager.
+
+    Args:
+        name: enum name.
+        size: width in bytes (1, 2, 4 or 8).
+        values: list of {"name": str, "value": int}.
+        category: optional category path.
+    """
+    payload = {"name": name, "size": size, "values": values}
+    if category:
+        payload["category"] = category
+    return safe_post_json("create_enum", payload)
+
+@mcp.tool()
+def create_typedef(name: str, target_type: str, category: str = None) -> str:
+    """
+    Create a typedef aliasing target_type to name.
+    """
+    data = {"name": name, "targetType": target_type}
+    if category:
+        data["category"] = category
+    return safe_post("create_typedef", data)
+
+@mcp.tool()
+def apply_data_type(address: str, type_name: str, clear_existing: bool = False) -> str:
+    """
+    Apply an existing data type to an address. Pass clear_existing=True to
+    overwrite conflicting existing data/code units.
+    """
+    return safe_post("apply_data_type", {
+        "address": address,
+        "type_name": type_name,
+        "clear_existing": "true" if clear_existing else "false",
+    })
+
+@mcp.tool()
+def delete_data_type(name: str) -> str:
+    """
+    Remove a data type from the Data Type Manager.
+    """
+    return safe_post("delete_data_type", {"name": name})
 
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
