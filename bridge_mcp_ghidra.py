@@ -637,17 +637,19 @@ def dbg_resume() -> str:
 
 @mcp.tool()
 def dbg_step_into() -> str:
-    """Step into (descend into call)."""
+    """Step into (descend into call). Returns a JSON diff:
+    {action, success, before_pc, after_pc, instruction, changed_registers}.
+    Saves a round-trip — no need to follow up with dbg_state."""
     return safe_post_dbg("dbg/step_into")
 
 @mcp.tool()
 def dbg_step_over() -> str:
-    """Step over (execute call without descending)."""
+    """Step over (execute call without descending). Same JSON diff as step_into."""
     return safe_post_dbg("dbg/step_over")
 
 @mcp.tool()
 def dbg_step_out() -> str:
-    """Step out (run until return from the current frame)."""
+    """Step out (run until return from the current frame). Same JSON diff."""
     return safe_post_dbg("dbg/step_out")
 
 @mcp.tool()

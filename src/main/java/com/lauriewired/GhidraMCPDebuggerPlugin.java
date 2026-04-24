@@ -25,6 +25,7 @@ import ghidra.framework.plugintool.util.PluginStatus;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.lang.Register;
 import ghidra.program.model.lang.RegisterValue;
+import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Program;
 import ghidra.program.util.ProgramLocation;
 import ghidra.trace.model.Trace;
@@ -118,10 +119,13 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
         });
 
         // ---- Execution control ----
+        // Steps return a diff JSON (before_pc/after_pc/instruction/changed_registers);
+        // resume/interrupt/kill stay text/plain ok|failed — their "diff" is
+        // basically the whole trace state, not a single instruction delta.
         server.createContext("/dbg/resume",    exchange -> Util.sendResponse(exchange, runBool("resume", api::resume)));
-        server.createContext("/dbg/step_into", exchange -> Util.sendResponse(exchange, runBool("step_into", api::stepInto)));
-        server.createContext("/dbg/step_over", exchange -> Util.sendResponse(exchange, runBool("step_over", api::stepOver)));
-        server.createContext("/dbg/step_out",  exchange -> Util.sendResponse(exchange, runBool("step_out", api::stepOut)));
+        server.createContext("/dbg/step_into", exchange -> Util.sendJson(exchange, stepDetailed("step_into", api::stepInto)));
+        server.createContext("/dbg/step_over", exchange -> Util.sendJson(exchange, stepDetailed("step_over", api::stepOver)));
+        server.createContext("/dbg/step_out",  exchange -> Util.sendJson(exchange, stepDetailed("step_out", api::stepOut)));
         server.createContext("/dbg/interrupt", exchange -> Util.sendResponse(exchange, runBool("interrupt", api::interrupt)));
         server.createContext("/dbg/kill",      exchange -> Util.sendResponse(exchange, runBool("kill", api::kill)));
 
@@ -205,6 +209,82 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
 
     @FunctionalInterface
     private interface BoolAction { boolean run(); }
+
+    /**
+     * Snapshot general-purpose registers (RIP, RFLAGS, RAX, ...) as
+     * name → "0xhex". Used for the step diff.
+     */
+    private Map<String, String> snapshotGeneralRegs() {
+        Map<String, String> out = new LinkedHashMap<>();
+        try {
+            TracePlatform plat = api.getCurrentPlatform();
+            if (plat == null) return out;
+            List<String> names = plat.getLanguage().getRegisters().stream()
+                .map(Register::getName)
+                .filter(n -> regCategory(n).equals("general"))
+                .collect(Collectors.toList());
+            List<RegisterValue> vals = api.readRegistersNamed(names);
+            for (RegisterValue rv : vals) {
+                if (rv == null) continue;
+                BigInteger v = rv.getUnsignedValue();
+                out.put(rv.getRegister().getName(), v != null ? ("0x" + v.toString(16)) : "?");
+            }
+        } catch (Exception ignore) { /* best-effort */ }
+        return out;
+    }
+
+    /**
+     * Run a step action and emit a structured JSON diff: before/after PC,
+     * which instruction was executed (looked up on the pre-step PC), and
+     * which general-purpose registers changed value. Agents no longer need
+     * a second /dbg/state round-trip after every step.
+     */
+    private String stepDetailed(String label, BoolAction action) {
+        Trace trace = api.getCurrentTrace();
+        if (trace == null) return "{\"error\":\"No active debug session\"}";
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("action", label);
+        try {
+            Address beforePc = api.getProgramCounter();
+            Map<String, String> before = snapshotGeneralRegs();
+            String instrStr = null;
+            try {
+                if (beforePc != null && api.getCurrentView() != null) {
+                    Instruction instr = api.getCurrentView().getListing().getInstructionAt(beforePc);
+                    if (instr != null) instrStr = instr.toString();
+                }
+            } catch (Exception ignore) {}
+
+            boolean ok = action.run();
+            try { api.flushAsyncPipelines(trace); } catch (Exception ignore) {}
+
+            Address afterPc = null;
+            try {
+                var coords = api.getCurrentDebuggerCoordinates();
+                afterPc = coords != null ? api.getProgramCounter(coords) : api.getProgramCounter();
+            } catch (Exception ignore) {}
+            Map<String, String> after = snapshotGeneralRegs();
+
+            out.put("success", ok);
+            out.put("before_pc", beforePc != null ? beforePc.toString() : null);
+            out.put("after_pc", afterPc != null ? afterPc.toString() : null);
+            out.put("instruction", instrStr);
+            Map<String, String> diff = new LinkedHashMap<>();
+            for (Map.Entry<String, String> e : after.entrySet()) {
+                String bv = before.get(e.getKey());
+                String av = e.getValue();
+                boolean differs = (bv == null) ? (av != null) : !bv.equals(av);
+                if (differs) diff.put(e.getKey(), (bv == null ? "?" : bv) + " -> " + av);
+            }
+            out.put("changed_registers", diff);
+            return Util.toJson(out);
+        } catch (Exception e) {
+            out.put("success", false);
+            out.put("error", e.getClass().getSimpleName() + ": "
+                + (e.getMessage() == null ? "" : e.getMessage()));
+            return Util.toJson(out);
+        }
+    }
 
     private String runBool(String label, BoolAction action) {
         Trace trace = api.getCurrentTrace();
