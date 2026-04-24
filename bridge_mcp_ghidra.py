@@ -344,6 +344,30 @@ def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
     return safe_get("function_xrefs", {"name": name, "offset": offset, "limit": limit})
 
 @mcp.tool()
+def list_functions_filtered(offset: int = 0, limit: int = 100,
+                            segment: str = None, complexity_min: int = 0,
+                            has_xrefs: bool = None, filter: str = None) -> list:
+    """Paginated function listing with filters, designed so an agent working
+    on a 10k-function binary can narrow down before the page cap hits.
+    Each line: `NAME @ ENTRY | segment=SEG | xrefs=N [| instrs=M]`.
+    - segment: exact block name match (e.g. ".text").
+    - complexity_min: drop functions with fewer than N instructions (counted
+      only when this is set; otherwise `instrs` is omitted from output).
+    - has_xrefs: True keeps only functions with xrefs to their entry; False
+      keeps the orphans; None (default) keeps all.
+    - filter: case-insensitive substring match on the function name."""
+    params = {"offset": offset, "limit": limit}
+    if segment:
+        params["segment"] = segment
+    if complexity_min > 0:
+        params["complexity_min"] = complexity_min
+    if has_xrefs is not None:
+        params["has_xrefs"] = "true" if has_xrefs else "false"
+    if filter:
+        params["filter"] = filter
+    return safe_get("list_functions_filtered", params)
+
+@mcp.tool()
 def get_instruction_info(address: str) -> str:
     """Structured JSON for a single instruction. Fields: address, mnemonic,
     length, bytes (hex), flow_type (CALL/JUMP/RETURN/etc), fall_through,

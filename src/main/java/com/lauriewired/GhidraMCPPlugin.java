@@ -354,6 +354,21 @@ public class GhidraMCPPlugin extends Plugin {
             Util.sendJson(exchange, buildInstructionInfoJson(qparams.get("address")));
         });
 
+        server.createContext("/list_functions_filtered", exchange -> {
+            Map<String, String> q = Util.parseQueryParams(exchange);
+            int offset = Util.parseIntOrDefault(q.get("offset"), 0);
+            int limit = Util.parseLimitOrDefault(q.get("limit"), 100);
+            String segment = q.get("segment");
+            int complexityMin = Util.parseIntOrDefault(q.get("complexity_min"), 0);
+            Boolean hasXrefs = null;
+            if (q.containsKey("has_xrefs")) {
+                hasXrefs = Boolean.parseBoolean(q.get("has_xrefs"));
+            }
+            String filter = q.get("filter");
+            Util.sendResponse(exchange,
+                listFunctionsFiltered(offset, limit, segment, complexityMin, hasXrefs, filter));
+        });
+
         server.createContext("/strings", exchange -> {
             Map<String, String> qparams = Util.parseQueryParams(exchange);
             int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
@@ -929,6 +944,64 @@ public class GhidraMCPPlugin extends Plugin {
      * Gets a function at the given address or containing the address
      * @return the function or null if not found
      */
+    /**
+     * Paginated + filtered function listing built for agents working on
+     * large binaries. /methods dumps everything and blows the context
+     * window; /list_functions_filtered lets the agent narrow before the
+     * page cap hits. Each line is:
+     *   NAME @ ENTRY | segment=SEG | instrs=N | xrefs=M
+     * instrs is only populated when complexity_min is set (counting is
+     * O(body) per function, so we skip when not needed).
+     */
+    private String listFunctionsFiltered(int offset, int limit, String segment,
+                                         int complexityMin, Boolean requireXrefs, String filter) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        String segLc = (segment == null || segment.isEmpty()) ? null : segment;
+        String filtLc = (filter == null || filter.isEmpty()) ? null : filter.toLowerCase();
+
+        List<String> out = new ArrayList<>();
+        int skipped = 0;
+        FunctionManager fm = program.getFunctionManager();
+        ReferenceManager rm = program.getReferenceManager();
+
+        for (Function f : fm.getFunctions(true)) {
+            if (filtLc != null && !f.getName().toLowerCase().contains(filtLc)) continue;
+
+            MemoryBlock blk = program.getMemory().getBlock(f.getEntryPoint());
+            String segName = blk != null ? blk.getName() : "?";
+            if (segLc != null && (blk == null || !segLc.equals(blk.getName()))) continue;
+
+            int xrefCount = rm.getReferenceCountTo(f.getEntryPoint());
+            if (requireXrefs != null) {
+                boolean has = xrefCount > 0;
+                if (has != requireXrefs) continue;
+            }
+
+            int instrCount = -1;
+            if (complexityMin > 0) {
+                int c = 0;
+                InstructionIterator it = program.getListing().getInstructions(f.getBody(), true);
+                while (it.hasNext()) { it.next(); c++; }
+                if (c < complexityMin) continue;
+                instrCount = c;
+            }
+
+            if (skipped < offset) { skipped++; continue; }
+            if (out.size() >= limit) break;
+
+            StringBuilder line = new StringBuilder();
+            line.append(f.getName()).append(" @ ").append(f.getEntryPoint())
+                .append(" | segment=").append(segName)
+                .append(" | xrefs=").append(xrefCount);
+            if (instrCount >= 0) line.append(" | instrs=").append(instrCount);
+            out.add(line.toString());
+        }
+        if (out.isEmpty()) return "No functions match filter";
+        return String.join("\n", out);
+    }
+
     /**
      * Emit a structured JSON description of a function. Agent-first: exposes
      * the same data as the text endpoints (name, signature, body) plus the
