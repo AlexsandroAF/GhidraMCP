@@ -362,6 +362,17 @@ public class GhidraMCPPlugin extends Plugin {
             Util.sendJsonAuto(exchange, buildInstructionInfoJson(qparams.get("address")));
         });
 
+        server.createContext("/undo", exchange -> {
+            Map<String, String> p = Util.parsePostParams(exchange);
+            int count = Util.parseIntOrDefault(p.get("count"), 1);
+            Util.sendResponse(exchange, undoOp(count));
+        });
+        server.createContext("/redo", exchange -> {
+            Map<String, String> p = Util.parsePostParams(exchange);
+            int count = Util.parseIntOrDefault(p.get("count"), 1);
+            Util.sendResponse(exchange, redoOp(count));
+        });
+
         server.createContext("/list_comments", exchange -> {
             Map<String, String> q = Util.parseQueryParams(exchange);
             int offset = Util.parseIntOrDefault(q.get("offset"), 0);
@@ -1019,6 +1030,54 @@ public class GhidraMCPPlugin extends Plugin {
      * Gets a function at the given address or containing the address
      * @return the function or null if not found
      */
+    /**
+     * Undo the last N transactions on the current program. Stops short if
+     * the undo stack runs out. Every mutation from the plugin (rename,
+     * comment set, create_struct, apply_data_type, ...) is its own
+     * transaction, so an agent that realised it committed a bad rename two
+     * steps back can recover by calling /undo?count=2.
+     */
+    private String undoOp(int count) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (count < 1) return "count must be positive";
+        int[] done = {0};
+        try {
+            for (int i = 0; i < count; i++) {
+                if (!program.canUndo()) break;
+                SwingUtilities.invokeAndWait(() -> {
+                    try { program.undo(); done[0]++; }
+                    catch (Exception e) { Msg.error(this, "undo error", e); }
+                });
+            }
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Swing error after " + done[0] + " undos: " + e.getMessage();
+        }
+        return "Undid " + done[0] + " transaction(s); canUndo=" + program.canUndo()
+            + ", canRedo=" + program.canRedo();
+    }
+
+    /** Redo the last N previously-undone transactions. Same stopping rule. */
+    private String redoOp(int count) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (count < 1) return "count must be positive";
+        int[] done = {0};
+        try {
+            for (int i = 0; i < count; i++) {
+                if (!program.canRedo()) break;
+                SwingUtilities.invokeAndWait(() -> {
+                    try { program.redo(); done[0]++; }
+                    catch (Exception e) { Msg.error(this, "redo error", e); }
+                });
+            }
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Swing error after " + done[0] + " redos: " + e.getMessage();
+        }
+        return "Redid " + done[0] + " transaction(s); canUndo=" + program.canUndo()
+            + ", canRedo=" + program.canRedo();
+    }
+
     /**
      * Enumerate every comment on the current program. Each line:
      *   ADDR [TYPE] text

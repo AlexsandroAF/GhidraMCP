@@ -368,6 +368,22 @@ def dbg_version() -> str:
     return "\n".join(safe_get_dbg("version"))
 
 @mcp.tool()
+def undo(count: int = 1) -> str:
+    """Undo the last `count` transactions on the current program. Every
+    mutation (rename, set_comment, apply_data_type, create_struct, ...)
+    is its own transaction, so `count=3` undoes the three most recent.
+    Stops short if the undo stack is shallower. Returns
+    'Undid N transaction(s); canUndo=..., canRedo=...' so you can tell
+    what's still reversible."""
+    return safe_post("undo", {"count": count})
+
+@mcp.tool()
+def redo(count: int = 1) -> str:
+    """Reapply the last `count` undone transactions. Complementary to undo
+    — you can step back through a batch of edits, then step forward again."""
+    return safe_post("redo", {"count": count})
+
+@mcp.tool()
 def list_comments(offset: int = 0, limit: int = 100, type: str = "all") -> list:
     """List every comment in the program. Each line is `ADDR [TYPE] text`.
     `type` restricts to a single kind: EOL, PRE, POST, PLATE or REPEATABLE;
