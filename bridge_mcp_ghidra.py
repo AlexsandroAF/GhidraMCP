@@ -809,8 +809,20 @@ def dbg_set_breakpoint(address: str) -> str:
 
 @mcp.tool()
 def dbg_remove_breakpoint(address: str) -> str:
-    """Remove any breakpoints at the given runtime address."""
+    """Remove any breakpoints at the given runtime address. Works for
+    both execute breakpoints (set via dbg_set_breakpoint) and watchpoints
+    (set via dbg_set_watchpoint)."""
     return safe_post_dbg("dbg/remove_breakpoint", {"address": address})
+
+@mcp.tool()
+def dbg_set_watchpoint(address: str, length: int = 4, kind: str = "access") -> str:
+    """Place a data watchpoint at `address`. Triggers when the target
+    reads, writes, or accesses (read|write|access) `length` bytes
+    starting there. Default 4 bytes / access — matches how you'd want
+    to watch a dword-sized variable. Appears in dbg_list_breakpoints;
+    cleared with dbg_remove_breakpoint."""
+    return safe_post_dbg("dbg/set_watchpoint",
+        {"address": address, "length": length, "kind": kind})
 
 @mcp.tool()
 def dbg_list_breakpoints() -> list:

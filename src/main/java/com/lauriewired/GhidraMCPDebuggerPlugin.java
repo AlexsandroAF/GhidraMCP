@@ -171,6 +171,11 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
             var p = Util.parsePostParams(exchange);
             Util.sendResponse(exchange, removeBreakpointString(p.get("address")));
         });
+        server.createContext("/dbg/set_watchpoint", exchange -> {
+            var p = Util.parsePostParams(exchange);
+            int length = Util.parseIntOrDefault(p.get("length"), 4);
+            Util.sendResponse(exchange, setWatchpointString(p.get("address"), length, p.get("kind")));
+        });
         server.createContext("/dbg/list_breakpoints", exchange -> Util.sendResponse(exchange, listBreakpointsString()));
 
         // ---- Launcher autonomy (Milestone 3) ----
@@ -595,6 +600,37 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
             if (loc == null) return "Invalid address: " + addrStr;
             boolean ok = api.breakpointsClear(loc);
             return ok ? ("Breakpoint(s) cleared at " + addrStr) : "No breakpoint to clear";
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    /**
+     * Place a data watchpoint that fires when the target accesses a memory
+     * range. kind selects the trigger: read, write, or access (either).
+     * Length is in bytes (default 4, typical for tracking a dword-sized
+     * variable). The underlying API returns a Set of LogicalBreakpoint the
+     * way execute breakpoints do, so /dbg/list_breakpoints sees watchpoints
+     * too and /dbg/remove_breakpoint can clear them.
+     */
+    private String setWatchpointString(String addressStr, int length, String kind) {
+        if (addressStr == null || addressStr.isEmpty()) return "address is required";
+        if (length <= 0) return "length must be positive";
+        if (api.getCurrentTrace() == null) return "No active debug session";
+        String k = (kind == null || kind.isEmpty()) ? "access" : kind.toLowerCase();
+        try {
+            ProgramLocation loc = api.dynamicLocation(addressStr);
+            if (loc == null) return "Invalid address: " + addressStr;
+            Set<LogicalBreakpoint> bps;
+            switch (k) {
+                case "read":   bps = api.breakpointSetRead(loc, length, ""); break;
+                case "write":  bps = api.breakpointSetWrite(loc, length, ""); break;
+                case "access": bps = api.breakpointSetAccess(loc, length, ""); break;
+                default: return "Invalid kind '" + k + "' — use read|write|access";
+            }
+            if (bps == null || bps.isEmpty()) return "Watchpoint not created";
+            return "Watchpoint(s) set: " + bps.size() + " at " + addressStr
+                + " kind=" + k + " length=" + length;
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
