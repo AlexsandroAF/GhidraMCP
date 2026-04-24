@@ -669,6 +669,23 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
         return tool.getService(TraceRmiLauncherService.class);
     }
 
+    /**
+     * Strip HTML tags and collapse whitespace in launcher descriptions.
+     * Ghidra's TraceRmi offers come with embedded &lt;html&gt; markup intended for
+     * the UI tooltip — leaving it in makes the text response impossible to
+     * read on the CLI.
+     */
+    private static String sanitizeHtml(String s) {
+        if (s == null || s.isEmpty()) return s;
+        return s.replaceAll("(?is)<[^>]+>", "")  // strip tags
+                .replaceAll("&lt;", "<")
+                .replaceAll("&gt;", ">")
+                .replaceAll("&amp;", "&")
+                .replaceAll("&nbsp;", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+    }
+
     private String listLaunchersString() {
         TraceRmiLauncherService svc = getLauncherService();
         if (svc == null) return "TraceRmiLauncherService not available (open the Debugger tool fully)";
@@ -680,8 +697,8 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
             StringBuilder sb = new StringBuilder();
             for (TraceRmiLaunchOffer off : offers) {
                 sb.append(off.getConfigName()).append(" | ").append(off.getTitle());
-                String desc = off.getDescription();
-                if (desc != null && !desc.isEmpty()) sb.append(" | ").append(desc.replace('\n', ' '));
+                String desc = sanitizeHtml(off.getDescription());
+                if (desc != null && !desc.isEmpty()) sb.append(" | ").append(desc);
                 Map<String, LaunchParameter<?>> params = off.getParameters();
                 if (params != null && !params.isEmpty()) {
                     sb.append("\n    params: ");
@@ -823,8 +840,21 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
         }
         if (match == null && fuzzy) {
             String lc = idOrHint.toLowerCase();
+            // Two passes: first a "local-<hint>.bat|.ps1" preference, then a
+            // plain contains. The first pass matters because an alphabetical
+            // contains would pick `kernel-dbgeng` ahead of `local-dbgeng` for
+            // hint="dbgeng", which is never what the agent means by "launch it".
             for (TraceRmiLaunchOffer off : offers) {
-                if (off.getConfigName().toLowerCase().contains(lc)) { match = off; break; }
+                String cn = off.getConfigName().toLowerCase();
+                if (cn.contains("local-" + lc) || cn.contains("/local-" + lc)) {
+                    match = off;
+                    break;
+                }
+            }
+            if (match == null) {
+                for (TraceRmiLaunchOffer off : offers) {
+                    if (off.getConfigName().toLowerCase().contains(lc)) { match = off; break; }
+                }
             }
         }
         if (match == null) {
