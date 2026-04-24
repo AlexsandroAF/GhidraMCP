@@ -481,20 +481,33 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
         if (res == null) return "Launch returned null";
         StringBuilder sb = new StringBuilder();
         sb.append("launcher: ").append(launcherId).append('\n');
-        if (res.exception() != null) {
-            sb.append("status: failed\n");
-            sb.append("error: ").append(res.exception().getMessage());
+        // LaunchResult is a record where `trace` and `exception` can both be
+        // non-null (dbgeng in particular reports soft errors alongside a usable
+        // trace). Treat the existence of a trace as the authoritative signal
+        // of success; surface the exception as a warning instead of failing.
+        boolean hasTrace = res.trace() != null;
+        Throwable ex = res.exception();
+        if (hasTrace) {
+            sb.append("status: ok\n");
+            sb.append("trace: ").append(res.trace().getName()).append('\n');
+            if (res.connection() != null) {
+                sb.append("connection: ").append(res.connection().getDescription()).append('\n');
+            }
+            if (res.sessions() != null && !res.sessions().isEmpty()) {
+                sb.append("sessions: ").append(res.sessions().keySet()).append('\n');
+            }
+            if (ex != null) {
+                sb.append("warning: ").append(ex.getClass().getSimpleName())
+                  .append(": ").append(ex.getMessage());
+            }
             return sb.toString();
         }
-        sb.append("status: ok\n");
-        if (res.trace() != null) {
-            sb.append("trace: ").append(res.trace().getName()).append('\n');
-        }
-        if (res.connection() != null) {
-            sb.append("connection: ").append(res.connection().getDescription()).append('\n');
-        }
-        if (res.sessions() != null && !res.sessions().isEmpty()) {
-            sb.append("sessions: ").append(res.sessions().keySet());
+        sb.append("status: failed\n");
+        if (ex != null) {
+            sb.append("error: ").append(ex.getClass().getSimpleName())
+              .append(": ").append(ex.getMessage());
+        } else {
+            sb.append("error: unknown (no trace created, no exception reported)");
         }
         return sb.toString();
     }
