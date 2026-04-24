@@ -256,13 +256,34 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
             } catch (Exception ignore) {}
 
             boolean ok = action.run();
+            // flushAsyncPipelines + waitForBreak together: the flush forces
+            // queued updates to land, waitForBreak pauses until the trace
+            // reports STOPPED again. Without the wait, a fast read can race
+            // the coordinate update and see the pre-step snap (reproduced
+            // deterministically on alternating steps against a dbgeng target).
+            try { api.flushAsyncPipelines(trace); } catch (Exception ignore) {}
+            try {
+                api.waitForBreak(trace, 2, java.util.concurrent.TimeUnit.SECONDS);
+            } catch (Exception ignore) { /* timeout or already stopped — proceed */ }
             try { api.flushAsyncPipelines(trace); } catch (Exception ignore) {}
 
             Address afterPc = null;
             try {
-                var coords = api.getCurrentDebuggerCoordinates();
-                afterPc = coords != null ? api.getProgramCounter(coords) : api.getProgramCounter();
+                // Prefer reading RIP directly — the Trace coordinates snapshot
+                // can lag even after waitForBreak, but a direct register read
+                // hits the current trace snap unambiguously.
+                RegisterValue rip = api.readRegister("RIP");
+                if (rip != null && rip.getUnsignedValue() != null) {
+                    afterPc = trace.getBaseAddressFactory().getDefaultAddressSpace()
+                        .getAddress(rip.getUnsignedValue().longValue());
+                }
             } catch (Exception ignore) {}
+            if (afterPc == null) {
+                try {
+                    var coords = api.getCurrentDebuggerCoordinates();
+                    afterPc = coords != null ? api.getProgramCounter(coords) : api.getProgramCounter();
+                } catch (Exception ignore) {}
+            }
             Map<String, String> after = snapshotGeneralRegs();
 
             out.put("success", ok);
