@@ -361,6 +361,23 @@ public class GhidraMCPPlugin extends Plugin {
             Util.sendJson(exchange, buildInstructionInfoJson(qparams.get("address")));
         });
 
+        // ---- Agent workspace (notes persistidas no Program Options) ----
+        server.createContext("/agent/note_set", exchange -> {
+            Map<String, String> p = Util.parsePostParams(exchange);
+            Util.sendResponse(exchange, noteSet(p.get("key"), p.get("value")));
+        });
+        server.createContext("/agent/note_get", exchange -> {
+            Map<String, String> q = Util.parseQueryParams(exchange);
+            Util.sendResponse(exchange, noteGet(q.get("key")));
+        });
+        server.createContext("/agent/note_list", exchange -> {
+            Util.sendResponse(exchange, noteList());
+        });
+        server.createContext("/agent/note_delete", exchange -> {
+            Map<String, String> p = Util.parsePostParams(exchange);
+            Util.sendResponse(exchange, noteDelete(p.get("key")));
+        });
+
         server.createContext("/search_bytes", exchange -> {
             Map<String, String> q = Util.parseQueryParams(exchange);
             int limit = Util.parseLimitOrDefault(q.get("limit"), 100);
@@ -976,6 +993,102 @@ public class GhidraMCPPlugin extends Plugin {
      * Gets a function at the given address or containing the address
      * @return the function or null if not found
      */
+    // ------------------------------------------------------------------
+    // Agent workspace: small KV store persisted on the Program itself.
+    // Stored under Options category "GhidraMCP.AgentNotes" — survives a
+    // Ghidra save/reopen cycle of the Program file, so an agent that
+    // renames + annotates during one session can pick up where it left
+    // off in another. Lost if the user quits without saving.
+    // ------------------------------------------------------------------
+    private static final String AGENT_NOTES_CATEGORY = "GhidraMCP.AgentNotes";
+
+    private String noteSet(String key, String value) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (key == null || key.isEmpty()) return "key is required";
+        if (value == null) return "value is required (use note_delete to remove)";
+        AtomicBoolean success = new AtomicBoolean(false);
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Agent note set: " + key);
+                try {
+                    program.getOptions(AGENT_NOTES_CATEGORY).setString(key, value);
+                    success.set(true);
+                } catch (Exception e) {
+                    Msg.error(this, "Note set error", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed on Swing thread: " + e.getMessage();
+        }
+        return success.get() ? ("Note set: " + key) : "Failed to set note";
+    }
+
+    private String noteGet(String key) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (key == null || key.isEmpty()) return "key is required";
+        try {
+            ghidra.framework.options.Options opts = program.getOptions(AGENT_NOTES_CATEGORY);
+            if (!opts.contains(key)) return "Not found: " + key;
+            return opts.getString(key, "");
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    private String noteList() {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        try {
+            ghidra.framework.options.Options opts = program.getOptions(AGENT_NOTES_CATEGORY);
+            List<String> names = new ArrayList<>(opts.getOptionNames());
+            Collections.sort(names);
+            if (names.isEmpty()) return "No notes";
+            StringBuilder sb = new StringBuilder();
+            for (String n : names) {
+                String v = opts.getString(n, "");
+                if (v.length() > 120) v = v.substring(0, 117) + "...";
+                sb.append(n).append(": ").append(Util.escapeNonAscii(v)).append('\n');
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    private String noteDelete(String key) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (key == null || key.isEmpty()) return "key is required";
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder err = new StringBuilder();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Agent note delete: " + key);
+                try {
+                    ghidra.framework.options.Options opts = program.getOptions(AGENT_NOTES_CATEGORY);
+                    if (!opts.contains(key)) {
+                        err.append("Not found: ").append(key);
+                        return;
+                    }
+                    opts.removeOption(key);
+                    success.set(true);
+                } catch (Exception e) {
+                    err.append(e.getMessage());
+                    Msg.error(this, "Note delete error", e);
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed on Swing thread: " + e.getMessage();
+        }
+        return success.get() ? ("Note deleted: " + key) : ("Failed: " + err);
+    }
+
     /**
      * Byte-pattern search with wildcard support. Pattern is space-separated
      * hex pairs; "??" (or "**") stands for "any byte". Example:

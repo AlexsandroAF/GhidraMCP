@@ -344,6 +344,30 @@ def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
     return safe_get("function_xrefs", {"name": name, "offset": offset, "limit": limit})
 
 @mcp.tool()
+def note_set(key: str, value: str) -> str:
+    """Save a key→value note on the current Program. Persists when the user
+    saves the Program file, so state the agent built up (hypotheses,
+    findings, TODOs) survives between sessions. Values are strings; encode
+    structured data as JSON if you need it."""
+    return safe_post("agent/note_set", {"key": key, "value": value})
+
+@mcp.tool()
+def note_get(key: str) -> str:
+    """Read a previously-set note. Returns the raw value, or 'Not found: <key>'."""
+    return "\n".join(safe_get("agent/note_get", {"key": key}))
+
+@mcp.tool()
+def note_list() -> list:
+    """List every note on the current Program as `key: value` lines. Values
+    over 120 chars are truncated with '...' — use note_get to fetch full."""
+    return safe_get("agent/note_list")
+
+@mcp.tool()
+def note_delete(key: str) -> str:
+    """Remove a note by key. Returns 'Note deleted: <key>' on success."""
+    return safe_post("agent/note_delete", {"key": key})
+
+@mcp.tool()
 def search_bytes(pattern: str, segment: str = None, limit: int = 100) -> list:
     """Scan memory for a byte pattern. `pattern` is space-separated hex pairs
     where `??` means any byte. Examples: "48 8b ?? c3" (x64 prologue tail),
