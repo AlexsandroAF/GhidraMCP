@@ -118,6 +118,14 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
             Util.sendResponse(exchange, "ok — GhidraMCPDebuggerPlugin active in tool=" + tool.getName());
         });
 
+        server.createContext("/health", exchange -> Util.sendJson(exchange, buildDbgHealthJson()));
+        server.createContext("/version", exchange -> Util.sendResponse(exchange,
+            "plugin=" + Util.PLUGIN_VERSION
+            + "\nghidra=" + safeGhidraVersion()
+            + "\ntool=" + tool.getName()
+            + "\nrole=debugger"
+            + "\nuptime_sec=" + Util.uptimeSeconds()));
+
         // ---- Execution control ----
         // Steps return a diff JSON (before_pc/after_pc/instruction/changed_registers);
         // resume/interrupt/kill stay text/plain ok|failed — their "diff" is
@@ -206,6 +214,32 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
     // ----------------------------------------------------------------------------------
     // Handlers
     // ----------------------------------------------------------------------------------
+
+    private static String safeGhidraVersion() {
+        try { return ghidra.framework.Application.getApplicationVersion(); }
+        catch (Throwable t) { return "unknown"; }
+    }
+
+    private String buildDbgHealthJson() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("status", "ok");
+        out.put("plugin", "GhidraMCPDebuggerPlugin");
+        out.put("plugin_version", Util.PLUGIN_VERSION);
+        out.put("ghidra_version", safeGhidraVersion());
+        out.put("tool", tool.getName());
+        out.put("uptime_sec", Util.uptimeSeconds());
+        try {
+            Trace trace = api.getCurrentTrace();
+            out.put("trace_active", trace != null);
+            if (trace != null) {
+                out.put("current_trace", trace.getName());
+                try { out.put("execution_state", api.getExecutionState(trace).toString()); }
+                catch (Exception ignore) {}
+                try { out.put("target_alive", api.isTargetAlive()); } catch (Exception ignore) {}
+            }
+        } catch (Exception ignore) {}
+        return Util.toJson(out);
+    }
 
     @FunctionalInterface
     private interface BoolAction { boolean run(); }

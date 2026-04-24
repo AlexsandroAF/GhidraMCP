@@ -361,6 +361,14 @@ public class GhidraMCPPlugin extends Plugin {
             Util.sendJson(exchange, buildInstructionInfoJson(qparams.get("address")));
         });
 
+        // ---- Observability (health/version) ----
+        server.createContext("/health", exchange -> Util.sendJson(exchange, buildHealthJson()));
+        server.createContext("/version", exchange -> Util.sendResponse(exchange,
+            "plugin=" + Util.PLUGIN_VERSION
+            + "\nghidra=" + safeGhidraVersion()
+            + "\ntool=" + tool.getName()
+            + "\nuptime_sec=" + Util.uptimeSeconds()));
+
         // ---- Multi-program awareness ----
         server.createContext("/list_programs", exchange -> {
             Util.sendResponse(exchange, listPrograms());
@@ -1002,6 +1010,38 @@ public class GhidraMCPPlugin extends Plugin {
      * Gets a function at the given address or containing the address
      * @return the function or null if not found
      */
+    // ------------------------------------------------------------------
+    // Observability: /health summarises plugin + Ghidra state in JSON so
+    // clients can confirm the server is live and which program is active
+    // without guessing from other endpoints. /version is the same info
+    // in plain text for quick shell inspection.
+    // ------------------------------------------------------------------
+    private static String safeGhidraVersion() {
+        try { return ghidra.framework.Application.getApplicationVersion(); }
+        catch (Throwable t) { return "unknown"; }
+    }
+
+    private String buildHealthJson() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("status", "ok");
+        out.put("plugin", "GhidraMCPPlugin");
+        out.put("plugin_version", Util.PLUGIN_VERSION);
+        out.put("ghidra_version", safeGhidraVersion());
+        out.put("tool", tool.getName());
+        out.put("uptime_sec", Util.uptimeSeconds());
+        try {
+            ProgramManager pm = tool.getService(ProgramManager.class);
+            if (pm != null) {
+                Program[] all = pm.getAllOpenPrograms();
+                out.put("programs_open", all != null ? all.length : 0);
+                Program cur = pm.getCurrentProgram();
+                out.put("current_program", cur != null ? cur.getName() : null);
+                out.put("current_program_path", cur != null ? cur.getDomainFile().getPathname() : null);
+            }
+        } catch (Exception ignore) {}
+        return Util.toJson(out);
+    }
+
     // ------------------------------------------------------------------
     // Multi-program awareness: list everything the ProgramManager has
     // open in this tool and let the agent switch the "current" one.

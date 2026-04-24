@@ -127,6 +127,18 @@ public final class Util {
         return sb.toString();
     }
 
+    /** Epoch millis at which this Util class (and therefore the plugin JVM)
+     *  was loaded. Used by /health and /stats to report uptime. */
+    public static final long STARTUP_MS = System.currentTimeMillis();
+
+    /** Seconds since the plugin loaded. */
+    public static long uptimeSeconds() {
+        return (System.currentTimeMillis() - STARTUP_MS) / 1000;
+    }
+
+    /** Plugin semantic version, surfaced by /health and /version. */
+    public static final String PLUGIN_VERSION = "1.0-SNAPSHOT";
+
     /** Safety cap on any single HTTP response body sent by the plugin. 256 KB
      *  is large enough for decompiled functions and sizeable listings, and
      *  small enough to avoid blowing up the MCP client's context window when

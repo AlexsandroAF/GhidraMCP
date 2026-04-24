@@ -344,6 +344,30 @@ def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
     return safe_get("function_xrefs", {"name": name, "offset": offset, "limit": limit})
 
 @mcp.tool()
+def health() -> str:
+    """JSON health of the CodeBrowser plugin: status, plugin/ghidra versions,
+    tool name, uptime, number of programs open, current program + its path."""
+    return "\n".join(safe_get("health"))
+
+@mcp.tool()
+def version() -> str:
+    """Plain-text version info for the CodeBrowser plugin: plugin version,
+    Ghidra version, tool name, uptime. Quick first-call sanity check."""
+    return "\n".join(safe_get("version"))
+
+@mcp.tool()
+def dbg_health() -> str:
+    """JSON health of the Debugger companion plugin: status, versions, tool
+    name, uptime, whether a trace is active, and if so its name, execution
+    state and target liveness."""
+    return "\n".join(safe_get_dbg("health"))
+
+@mcp.tool()
+def dbg_version() -> str:
+    """Plain-text version of the Debugger plugin."""
+    return "\n".join(safe_get_dbg("version"))
+
+@mcp.tool()
 def list_programs() -> list:
     """List every Program currently open in the CodeBrowser tool. Each line
     is `* /path/to/file (name=<short>)` — the leading `*` marks the current
