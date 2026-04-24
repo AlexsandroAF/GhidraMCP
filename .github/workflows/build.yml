@@ -21,6 +21,10 @@ jobs:
         Framework/SoftwareModeling/lib/SoftwareModeling.jar
         Framework/Utility/lib/Utility.jar
         Framework/Gui/lib/Gui.jar
+        Debug/Debugger-api/lib/Debugger-api.jar
+        Debug/Framework-TraceModeling/lib/Framework-TraceModeling.jar
+        Debug/Debugger/lib/Debugger.jar
+        Debug/ProposedUtils/lib/ProposedUtils.jar
 
     steps:
     - uses: actions/checkout@v4

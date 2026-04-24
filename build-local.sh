@@ -46,9 +46,10 @@ echo "  javac : $($JAVAC -version 2>&1)"
 echo "  lib/  : $(ls $LIB_DIR/*.jar 2>/dev/null | wc -l | tr -d ' ') JARs do Ghidra"
 echo
 
-# --- Sanity check: lib/ precisa ter os 8 JARs do Ghidra ---
+# --- Sanity check: lib/ precisa ter os 12 JARs do Ghidra (8 base + 4 debugger) ---
 MISSING=0
-for jar in Base.jar Decompiler.jar Docking.jar Generic.jar Gui.jar Project.jar SoftwareModeling.jar Utility.jar; do
+for jar in Base.jar Decompiler.jar Docking.jar Generic.jar Gui.jar Project.jar SoftwareModeling.jar Utility.jar \
+           Debugger.jar Debugger-api.jar Framework-TraceModeling.jar ProposedUtils.jar; do
     if [ ! -f "$LIB_DIR/$jar" ]; then
         echo "  [ERRO] Faltando $LIB_DIR/$jar"
         MISSING=1

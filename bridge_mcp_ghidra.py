@@ -16,6 +16,10 @@ from urllib.parse import urljoin
 from mcp.server.fastmcp import FastMCP
 
 DEFAULT_GHIDRA_SERVER = "http://127.0.0.1:8080/"
+# Debugger companion plugin runs in the Ghidra Debugger tool on a separate
+# port to avoid colliding with the CodeBrowser plugin on 8080 when both tools
+# are open. 18081 is the default; override with --ghidra-debugger-server.
+DEFAULT_GHIDRA_DEBUGGER_SERVER = "http://127.0.0.1:18081/"
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +27,7 @@ mcp = FastMCP("ghidra-mcp")
 
 # Initialize ghidra_server_url with default value
 ghidra_server_url = DEFAULT_GHIDRA_SERVER
+ghidra_debugger_url = DEFAULT_GHIDRA_DEBUGGER_SERVER
 
 def safe_get(endpoint: str, params: dict = None) -> list:
     """
@@ -76,6 +81,55 @@ def safe_post_json(endpoint: str, payload: dict) -> str:
             return f"Error {response.status_code}: {response.text.strip()}"
     except Exception as e:
         return f"Request failed: {str(e)}"
+
+# --- Debugger companion helpers ---
+# These hit the second HTTP server hosted by GhidraMCPDebuggerPlugin inside
+# the Ghidra Debugger tool. Longer timeout because debugger ops (step, resume,
+# interrupt) can stall on GDB/dbgeng ipc.
+_DBG_TIMEOUT = 30
+
+def safe_get_dbg(endpoint: str, params: dict = None) -> list:
+    if params is None:
+        params = {}
+    url = urljoin(ghidra_debugger_url, endpoint)
+    try:
+        response = requests.get(url, params=params, timeout=_DBG_TIMEOUT)
+        response.encoding = 'utf-8'
+        if response.ok:
+            return response.text.splitlines()
+        return [f"Error {response.status_code}: {response.text.strip()}"]
+    except Exception as e:
+        return [f"Debugger request failed (is Ghidra Debugger tool open with the plugin enabled?): {e}"]
+
+def safe_post_dbg(endpoint: str, data: dict = None) -> str:
+    if data is None:
+        data = {}
+    url = urljoin(ghidra_debugger_url, endpoint)
+    try:
+        response = requests.post(url, data=data, timeout=_DBG_TIMEOUT)
+        response.encoding = 'utf-8'
+        if response.ok:
+            return response.text.strip()
+        return f"Error {response.status_code}: {response.text.strip()}"
+    except Exception as e:
+        return f"Debugger request failed (is Ghidra Debugger tool open with the plugin enabled?): {e}"
+
+def _safe_post_json_dbg(endpoint: str, payload: dict) -> str:
+    """JSON body variant for the debugger port (e.g. /dbg/launch with nested args)."""
+    url = urljoin(ghidra_debugger_url, endpoint)
+    try:
+        response = requests.post(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            timeout=_DBG_TIMEOUT,
+        )
+        response.encoding = 'utf-8'
+        if response.ok:
+            return response.text.strip()
+        return f"Error {response.status_code}: {response.text.strip()}"
+    except Exception as e:
+        return f"Debugger request failed: {e}"
 
 @mcp.tool()
 def list_methods(offset: int = 0, limit: int = 100) -> list:
@@ -492,10 +546,169 @@ def delete_data_type(name: str) -> str:
     """
     return safe_post("delete_data_type", {"name": name})
 
+# ---------------------------------------------------------------------------
+# Debugger tools (require Ghidra Debugger tool open + GhidraMCPDebuggerPlugin
+# enabled + an active trace/target, e.g. launched via GDB/dbgeng/LLDB in the
+# Debugger UI). The companion plugin listens on a separate port (default
+# 18081) configurable via --ghidra-debugger-server.
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def dbg_ping() -> str:
+    """Sanity check for the Debugger companion plugin. Reports which Ghidra
+    tool is hosting the server; useful to confirm the plugin is actually
+    loaded before trying other dbg_* tools."""
+    return "\n".join(safe_get_dbg("dbg/ping"))
+
+@mcp.tool()
+def dbg_state() -> str:
+    """Current runtime state: execution_state (RUNNING/STOPPED/TERMINATED),
+    trace name, current thread, program counter, frame index, snap, and
+    whether the target is still alive."""
+    return "\n".join(safe_get_dbg("dbg/state"))
+
+@mcp.tool()
+def dbg_list_threads() -> list:
+    """List all threads in the current trace. Format: `id | name | alive=bool`."""
+    return safe_get_dbg("dbg/list_threads")
+
+@mcp.tool()
+def dbg_list_frames() -> str:
+    """Return stack frames for the current thread. v1 exposes only the current
+    frame (index + PC); multi-frame walk is not implemented yet."""
+    return "\n".join(safe_get_dbg("dbg/list_frames"))
+
+@mcp.tool()
+def dbg_read_registers() -> list:
+    """Dump all registers of the current platform/thread/frame as
+    `name: 0xvalue` lines."""
+    return safe_get_dbg("dbg/read_registers")
+
+@mcp.tool()
+def dbg_read_memory(address: str, length: int = 16, format: str = "hex") -> str:
+    """Read bytes from the live target's memory at a runtime address.
+    Length capped at 4096. format is `hex` (default) or `base64`."""
+    return "\n".join(safe_get_dbg("dbg/read_memory", {
+        "address": address, "length": length, "format": format,
+    }))
+
+@mcp.tool()
+def dbg_write_memory(address: str, bytes_hex: str) -> str:
+    """Write raw bytes to the live target. `bytes_hex` accepts spaces and
+    `0x` prefixes; must decode to an even number of hex digits. Write only
+    succeeds if the Debugger control mode allows target mutation."""
+    return safe_post_dbg("dbg/write_memory", {"address": address, "bytes_hex": bytes_hex})
+
+@mcp.tool()
+def dbg_write_register(name: str, value: str) -> str:
+    """Write a value to a register by name. Value is parsed as hex if it
+    starts with `0x`, else decimal. Requires control mode that allows
+    target writes."""
+    return safe_post_dbg("dbg/write_register", {"name": name, "value": value})
+
+@mcp.tool()
+def dbg_resume() -> str:
+    """Resume the target."""
+    return safe_post_dbg("dbg/resume")
+
+@mcp.tool()
+def dbg_step_into() -> str:
+    """Step into (descend into call)."""
+    return safe_post_dbg("dbg/step_into")
+
+@mcp.tool()
+def dbg_step_over() -> str:
+    """Step over (execute call without descending)."""
+    return safe_post_dbg("dbg/step_over")
+
+@mcp.tool()
+def dbg_step_out() -> str:
+    """Step out (run until return from the current frame)."""
+    return safe_post_dbg("dbg/step_out")
+
+@mcp.tool()
+def dbg_interrupt() -> str:
+    """Interrupt the running target (pause without terminating)."""
+    return safe_post_dbg("dbg/interrupt")
+
+@mcp.tool()
+def dbg_kill() -> str:
+    """Terminate the target. Destructive; ending a debug session. Use with intent."""
+    return safe_post_dbg("dbg/kill")
+
+@mcp.tool()
+def dbg_set_breakpoint(address: str) -> str:
+    """Set a software execute breakpoint at the given runtime address."""
+    return safe_post_dbg("dbg/set_breakpoint", {"address": address})
+
+@mcp.tool()
+def dbg_remove_breakpoint(address: str) -> str:
+    """Remove any breakpoints at the given runtime address."""
+    return safe_post_dbg("dbg/remove_breakpoint", {"address": address})
+
+@mcp.tool()
+def dbg_list_breakpoints() -> list:
+    """List all logical breakpoints currently known to the Debugger tool."""
+    return safe_get_dbg("dbg/list_breakpoints")
+
+# ---------------------------------------------------------------------------
+# Launcher autonomy (Milestone 3): start/attach targets and run raw backend
+# commands without touching the Ghidra UI. Requires a Program loaded either
+# in the CodeBrowser or the Debugger tool (for getOffers to find applicable
+# launchers).
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def dbg_list_launchers() -> list:
+    """List every TraceRmi launcher offered for the current program.
+    Each entry: `config_name | title | description\n    params: name:type...`
+    The agent uses this to discover `launcher_id` and its parameter schema
+    before calling dbg_launch."""
+    return safe_get_dbg("dbg/list_launchers")
+
+@mcp.tool()
+def dbg_launch(launcher_id: str, args: dict = None) -> str:
+    """Generic launch. Pass `launcher_id` as returned by dbg_list_launchers
+    and `args` as a dict of {param_name: value_as_string}. All values are
+    stringified before decoding by the offer's parameter decoder."""
+    payload = {"launcher_id": launcher_id}
+    if args:
+        payload["args"] = {k: str(v) for k, v in args.items()}
+    return _safe_post_json_dbg("dbg/launch", payload)
+
+@mcp.tool()
+def dbg_launch_gdb(binary_path: str = "", args: str = "") -> str:
+    """Launch the current program under GDB (local). Wrapper that fuzzy-matches
+    a launcher whose config_name contains 'gdb'. `binary_path` maps to the
+    launcher's image parameter; `args` is the program's command line."""
+    return safe_post_dbg("dbg/launch_gdb", {"binary_path": binary_path, "args": args})
+
+@mcp.tool()
+def dbg_launch_dbgeng(binary_path: str = "", args: str = "") -> str:
+    """Launch the current program under dbgeng (Windows). Wrapper that fuzzy-
+    matches a launcher containing 'dbgeng'."""
+    return safe_post_dbg("dbg/launch_dbgeng", {"binary_path": binary_path, "args": args})
+
+@mcp.tool()
+def dbg_execute(command: str) -> str:
+    """Send a raw command string to the connected backend debugger (GDB, dbgeng,
+    LLDB) and capture its output. Escape hatch for anything the other dbg_*
+    tools don't expose — e.g. `info functions`, `x/10i $pc`, `bt`, custom
+    scripts. Requires an active trace/target."""
+    return safe_post_dbg("dbg/execute", {"command": command})
+
+@mcp.tool()
+def dbg_disconnect() -> str:
+    """Terminate the current debug session (kill target + close trace).
+    Destructive — use only when you're done with the session."""
+    return safe_post_dbg("dbg/disconnect")
+
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")
     parser.add_argument("--ghidra-server", type=str, default=DEFAULT_GHIDRA_SERVER,
-                        help=f"Ghidra server URL, default: {DEFAULT_GHIDRA_SERVER}")
+                        help=f"CodeBrowser plugin URL, default: {DEFAULT_GHIDRA_SERVER}")
+    parser.add_argument("--ghidra-debugger-server", type=str, default=DEFAULT_GHIDRA_DEBUGGER_SERVER,
+                        help=f"Debugger companion plugin URL, default: {DEFAULT_GHIDRA_DEBUGGER_SERVER}")
     parser.add_argument("--mcp-host", type=str, default="127.0.0.1",
                         help="Host to run MCP server on (only used for sse), default: 127.0.0.1")
     parser.add_argument("--mcp-port", type=int,
@@ -503,11 +716,13 @@ def main():
     parser.add_argument("--transport", type=str, default="stdio", choices=["stdio", "sse"],
                         help="Transport protocol for MCP, default: stdio")
     args = parser.parse_args()
-    
-    # Use the global variable to ensure it's properly updated
-    global ghidra_server_url
+
+    # Use the global variables to ensure they're properly updated
+    global ghidra_server_url, ghidra_debugger_url
     if args.ghidra_server:
         ghidra_server_url = args.ghidra_server
+    if args.ghidra_debugger_server:
+        ghidra_debugger_url = args.ghidra_debugger_server
     
     if args.transport == "sse":
         try:

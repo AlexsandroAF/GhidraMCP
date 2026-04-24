@@ -56,15 +56,14 @@ import ghidra.program.model.pcode.PcodeOp;
 import ghidra.program.model.pcode.PcodeOpAST;
 import ghidra.framework.options.Options;
 
+import com.lauriewired.Util;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import javax.swing.SwingUtilities;
 import java.io.IOException;
-import java.io.OutputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.net.InetSocketAddress;
-import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -82,7 +81,6 @@ public class GhidraMCPPlugin extends Plugin {
     private static final String OPTION_CATEGORY_NAME = "GhidraMCP HTTP Server";
     private static final String PORT_OPTION_NAME = "Server Port";
     private static final int DEFAULT_PORT = 8080;
-    private static final int MAX_LIMIT = 10000;
     private static final int MAX_READ_BYTES = 4096;
 
     public GhidraMCPPlugin(PluginTool tool) {
@@ -121,147 +119,147 @@ public class GhidraMCPPlugin extends Plugin {
 
         // Each listing endpoint uses offset & limit from query params:
         server.createContext("/methods", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit  = parseLimitOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, getAllFunctionNames(offset, limit));
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit  = Util.parseLimitOrDefault(qparams.get("limit"),  100);
+            Util.sendResponse(exchange, getAllFunctionNames(offset, limit));
         });
 
         server.createContext("/classes", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit  = parseLimitOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, getAllClassNames(offset, limit));
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit  = Util.parseLimitOrDefault(qparams.get("limit"),  100);
+            Util.sendResponse(exchange, getAllClassNames(offset, limit));
         });
 
         server.createContext("/decompile", exchange -> {
             String name = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            sendResponse(exchange, decompileFunctionByName(name));
+            Util.sendResponse(exchange, decompileFunctionByName(name));
         });
 
         server.createContext("/renameFunction", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
+            Map<String, String> params = Util.parsePostParams(exchange);
             String response = renameFunction(params.get("oldName"), params.get("newName"))
                     ? "Renamed successfully" : "Rename failed";
-            sendResponse(exchange, response);
+            Util.sendResponse(exchange, response);
         });
 
         server.createContext("/renameData", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
+            Map<String, String> params = Util.parsePostParams(exchange);
             renameDataAtAddress(params.get("address"), params.get("newName"));
-            sendResponse(exchange, "Rename data attempted");
+            Util.sendResponse(exchange, "Rename data attempted");
         });
 
         server.createContext("/renameVariable", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
+            Map<String, String> params = Util.parsePostParams(exchange);
             String functionName = params.get("functionName");
             String oldName = params.get("oldName");
             String newName = params.get("newName");
             String result = renameVariableInFunction(functionName, oldName, newName);
-            sendResponse(exchange, result);
+            Util.sendResponse(exchange, result);
         });
 
         server.createContext("/segments", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit  = parseLimitOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listSegments(offset, limit));
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit  = Util.parseLimitOrDefault(qparams.get("limit"),  100);
+            Util.sendResponse(exchange, listSegments(offset, limit));
         });
 
         server.createContext("/imports", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit  = parseLimitOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listImports(offset, limit));
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit  = Util.parseLimitOrDefault(qparams.get("limit"),  100);
+            Util.sendResponse(exchange, listImports(offset, limit));
         });
 
         server.createContext("/exports", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit  = parseLimitOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listExports(offset, limit));
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit  = Util.parseLimitOrDefault(qparams.get("limit"),  100);
+            Util.sendResponse(exchange, listExports(offset, limit));
         });
 
         server.createContext("/namespaces", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit  = parseLimitOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listNamespaces(offset, limit));
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit  = Util.parseLimitOrDefault(qparams.get("limit"),  100);
+            Util.sendResponse(exchange, listNamespaces(offset, limit));
         });
 
         server.createContext("/data", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit  = parseLimitOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listDefinedData(offset, limit));
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit  = Util.parseLimitOrDefault(qparams.get("limit"),  100);
+            Util.sendResponse(exchange, listDefinedData(offset, limit));
         });
 
         server.createContext("/searchFunctions", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
             String searchTerm = qparams.get("query");
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, searchFunctionsByName(searchTerm, offset, limit));
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = Util.parseLimitOrDefault(qparams.get("limit"), 100);
+            Util.sendResponse(exchange, searchFunctionsByName(searchTerm, offset, limit));
         });
 
         // New API endpoints based on requirements
         
         server.createContext("/get_function_by_address", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, getFunctionByAddress(address));
+            Util.sendResponse(exchange, getFunctionByAddress(address));
         });
 
         server.createContext("/get_current_address", exchange -> {
-            sendResponse(exchange, getCurrentAddress());
+            Util.sendResponse(exchange, getCurrentAddress());
         });
 
         server.createContext("/get_current_function", exchange -> {
-            sendResponse(exchange, getCurrentFunction());
+            Util.sendResponse(exchange, getCurrentFunction());
         });
 
         server.createContext("/list_functions", exchange -> {
-            sendResponse(exchange, listFunctions());
+            Util.sendResponse(exchange, listFunctions());
         });
 
         server.createContext("/decompile_function", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, decompileFunctionByAddress(address));
+            Util.sendResponse(exchange, decompileFunctionByAddress(address));
         });
 
         server.createContext("/disassemble_function", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, disassembleFunction(address));
+            Util.sendResponse(exchange, disassembleFunction(address));
         });
 
         server.createContext("/set_decompiler_comment", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
+            Map<String, String> params = Util.parsePostParams(exchange);
             String address = params.get("address");
             String comment = params.get("comment");
             boolean success = setDecompilerComment(address, comment);
-            sendResponse(exchange, success ? "Comment set successfully" : "Failed to set comment");
+            Util.sendResponse(exchange, success ? "Comment set successfully" : "Failed to set comment");
         });
 
         server.createContext("/set_disassembly_comment", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
+            Map<String, String> params = Util.parsePostParams(exchange);
             String address = params.get("address");
             String comment = params.get("comment");
             boolean success = setDisassemblyComment(address, comment);
-            sendResponse(exchange, success ? "Comment set successfully" : "Failed to set comment");
+            Util.sendResponse(exchange, success ? "Comment set successfully" : "Failed to set comment");
         });
 
         server.createContext("/rename_function_by_address", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
+            Map<String, String> params = Util.parsePostParams(exchange);
             String functionAddress = params.get("function_address");
             String newName = params.get("new_name");
             boolean success = renameFunctionByAddress(functionAddress, newName);
-            sendResponse(exchange, success ? "Function renamed successfully" : "Failed to rename function");
+            Util.sendResponse(exchange, success ? "Function renamed successfully" : "Failed to rename function");
         });
 
         server.createContext("/set_function_prototype", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
+            Map<String, String> params = Util.parsePostParams(exchange);
             String functionAddress = params.get("function_address");
             String prototype = params.get("prototype");
 
@@ -274,15 +272,15 @@ public class GhidraMCPPlugin extends Plugin {
                 if (!result.getErrorMessage().isEmpty()) {
                     successMsg += "\n\nWarnings/Debug Info:\n" + result.getErrorMessage();
                 }
-                sendResponse(exchange, successMsg);
+                Util.sendResponse(exchange, successMsg);
             } else {
                 // Return the detailed error message to the client
-                sendResponse(exchange, "Failed to set function prototype: " + result.getErrorMessage());
+                Util.sendResponse(exchange, "Failed to set function prototype: " + result.getErrorMessage());
             }
         });
 
         server.createContext("/set_local_variable_type", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
+            Map<String, String> params = Util.parsePostParams(exchange);
             String functionAddress = params.get("function_address");
             String variableName = params.get("variable_name");
             String newType = params.get("new_type");
@@ -319,155 +317,159 @@ public class GhidraMCPPlugin extends Plugin {
             String successMsg = success ? "Variable type set successfully" : "Failed to set variable type";
             responseMsg.append("\nResult: ").append(successMsg);
 
-            sendResponse(exchange, responseMsg.toString());
+            Util.sendResponse(exchange, responseMsg.toString());
         });
 
         server.createContext("/xrefs_to", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
             String address = qparams.get("address");
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, getXrefsTo(address, offset, limit));
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = Util.parseLimitOrDefault(qparams.get("limit"), 100);
+            Util.sendResponse(exchange, getXrefsTo(address, offset, limit));
         });
 
         server.createContext("/xrefs_from", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
             String address = qparams.get("address");
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, getXrefsFrom(address, offset, limit));
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = Util.parseLimitOrDefault(qparams.get("limit"), 100);
+            Util.sendResponse(exchange, getXrefsFrom(address, offset, limit));
         });
 
         server.createContext("/function_xrefs", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
             String name = qparams.get("name");
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, getFunctionXrefs(name, offset, limit));
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = Util.parseLimitOrDefault(qparams.get("limit"), 100);
+            Util.sendResponse(exchange, getFunctionXrefs(name, offset, limit));
         });
 
         server.createContext("/strings", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = Util.parseLimitOrDefault(qparams.get("limit"), 100);
             String filter = qparams.get("filter");
-            sendResponse(exchange, listDefinedStrings(offset, limit, filter));
+            Util.sendResponse(exchange, listDefinedStrings(offset, limit, filter));
         });
 
         // ---- Labels ----
 
         server.createContext("/create_label", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
-            sendResponse(exchange, createLabel(params.get("address"), params.get("name")));
+            Map<String, String> params = Util.parsePostParams(exchange);
+            Util.sendResponse(exchange, createLabel(params.get("address"), params.get("name")));
         });
 
         server.createContext("/remove_label", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
-            sendResponse(exchange, removeLabel(params.get("address"), params.get("name")));
+            Map<String, String> params = Util.parsePostParams(exchange);
+            Util.sendResponse(exchange, removeLabel(params.get("address"), params.get("name")));
         });
 
         server.createContext("/list_labels", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = Util.parseLimitOrDefault(qparams.get("limit"), 100);
             String filter = qparams.get("filter");
-            sendResponse(exchange, listLabels(offset, limit, filter));
+            Util.sendResponse(exchange, listLabels(offset, limit, filter));
         });
 
         // ---- Bookmarks ----
 
         server.createContext("/set_bookmark", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
-            sendResponse(exchange, setBookmark(
+            Map<String, String> params = Util.parsePostParams(exchange);
+            Util.sendResponse(exchange, setBookmark(
                 params.get("address"), params.get("category"), params.get("comment")));
         });
 
         server.createContext("/remove_bookmark", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
-            sendResponse(exchange, removeBookmark(params.get("address"), params.get("category")));
+            Map<String, String> params = Util.parsePostParams(exchange);
+            Util.sendResponse(exchange, removeBookmark(params.get("address"), params.get("category")));
         });
 
         server.createContext("/list_bookmarks", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = Util.parseLimitOrDefault(qparams.get("limit"), 100);
             String category = qparams.get("category");
-            sendResponse(exchange, listBookmarks(offset, limit, category));
+            Util.sendResponse(exchange, listBookmarks(offset, limit, category));
         });
 
         // ---- Raw memory ----
 
         server.createContext("/read_bytes", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
             String address = qparams.get("address");
-            int length = parseIntOrDefault(qparams.get("length"), 16);
+            int length = Util.parseIntOrDefault(qparams.get("length"), 16);
             String format = qparams.get("format");
-            sendResponse(exchange, readBytes(address, length, format));
+            Util.sendResponse(exchange, readBytes(address, length, format));
         });
 
         // ---- Decompiler output with address mapping + P-code ----
 
         server.createContext("/decompile_with_map", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            sendResponse(exchange, decompileWithAddressMap(qparams.get("address"), qparams.get("name")));
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            Util.sendResponse(exchange, decompileWithAddressMap(qparams.get("address"), qparams.get("name")));
         });
 
         server.createContext("/get_high_pcode", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            sendResponse(exchange, getHighPcode(qparams.get("address")));
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            Util.sendResponse(exchange, getHighPcode(qparams.get("address")));
         });
 
         server.createContext("/get_pcode", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
             String address = qparams.get("address");
-            int length = parseIntOrDefault(qparams.get("length"), 0);
-            sendResponse(exchange, getLowPcode(address, length));
+            int length = Util.parseIntOrDefault(qparams.get("length"), 0);
+            Util.sendResponse(exchange, getLowPcode(address, length));
         });
 
         // ---- Data types (structs, enums, typedefs) ----
 
         server.createContext("/list_data_types", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            int offset = parseIntOrDefault(qparams.get("offset"), 0);
-            int limit = parseLimitOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, listDataTypes(offset, limit,
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = Util.parseLimitOrDefault(qparams.get("limit"), 100);
+            Util.sendResponse(exchange, listDataTypes(offset, limit,
                 qparams.get("category"), qparams.get("filter")));
         });
 
         server.createContext("/get_data_type", exchange -> {
-            Map<String, String> qparams = parseQueryParams(exchange);
-            sendResponse(exchange, getDataTypeDefinition(qparams.get("name")));
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            Util.sendResponse(exchange, getDataTypeDefinition(qparams.get("name")));
         });
 
         server.createContext("/create_struct", exchange -> {
-            String body = readBody(exchange);
-            sendResponse(exchange, createStructFromJson(body));
+            String body = Util.readBody(exchange);
+            Util.sendResponse(exchange, createStructFromJson(body));
         });
 
         server.createContext("/create_enum", exchange -> {
-            String body = readBody(exchange);
-            sendResponse(exchange, createEnumFromJson(body));
+            String body = Util.readBody(exchange);
+            Util.sendResponse(exchange, createEnumFromJson(body));
         });
 
         server.createContext("/create_typedef", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
-            sendResponse(exchange, createTypedef(
+            Map<String, String> params = Util.parsePostParams(exchange);
+            Util.sendResponse(exchange, createTypedef(
                 params.get("name"), params.get("targetType"), params.get("category")));
         });
 
         server.createContext("/apply_data_type", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
+            Map<String, String> params = Util.parsePostParams(exchange);
             boolean clear = "true".equalsIgnoreCase(params.get("clear_existing"));
-            sendResponse(exchange, applyDataType(
+            Util.sendResponse(exchange, applyDataType(
                 params.get("address"), params.get("type_name"), clear));
         });
 
         server.createContext("/delete_data_type", exchange -> {
-            Map<String, String> params = parsePostParams(exchange);
-            sendResponse(exchange, deleteDataType(params.get("name")));
+            Map<String, String> params = Util.parsePostParams(exchange);
+            Util.sendResponse(exchange, deleteDataType(params.get("name")));
         });
 
-        server.setExecutor(null);
+        server.setExecutor(java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
+            Thread t = new Thread(r, "GhidraMCP-HTTP-Worker");
+            t.setDaemon(true);
+            return t;
+        }));
         new Thread(() -> {
             try {
                 server.start();
@@ -491,7 +493,7 @@ public class GhidraMCPPlugin extends Plugin {
         for (Function f : program.getFunctionManager().getFunctions(true)) {
             names.add(f.getName());
         }
-        return paginateList(names, offset, limit);
+        return Util.paginateList(names, offset, limit);
     }
 
     private String getAllClassNames(int offset, int limit) {
@@ -508,7 +510,7 @@ public class GhidraMCPPlugin extends Plugin {
         // Convert set to list for pagination
         List<String> sorted = new ArrayList<>(classNames);
         Collections.sort(sorted);
-        return paginateList(sorted, offset, limit);
+        return Util.paginateList(sorted, offset, limit);
     }
 
     private String listSegments(int offset, int limit) {
@@ -519,7 +521,7 @@ public class GhidraMCPPlugin extends Plugin {
         for (MemoryBlock block : program.getMemory().getBlocks()) {
             lines.add(String.format("%s: %s - %s", block.getName(), block.getStart(), block.getEnd()));
         }
-        return paginateList(lines, offset, limit);
+        return Util.paginateList(lines, offset, limit);
     }
 
     private String listImports(int offset, int limit) {
@@ -530,7 +532,7 @@ public class GhidraMCPPlugin extends Plugin {
         for (Symbol symbol : program.getSymbolTable().getExternalSymbols()) {
             lines.add(symbol.getName() + " -> " + symbol.getAddress());
         }
-        return paginateList(lines, offset, limit);
+        return Util.paginateList(lines, offset, limit);
     }
 
     private String listExports(int offset, int limit) {
@@ -548,7 +550,7 @@ public class GhidraMCPPlugin extends Plugin {
                 lines.add(s.getName() + " -> " + s.getAddress());
             }
         }
-        return paginateList(lines, offset, limit);
+        return Util.paginateList(lines, offset, limit);
     }
 
     private String listNamespaces(int offset, int limit) {
@@ -564,7 +566,7 @@ public class GhidraMCPPlugin extends Plugin {
         }
         List<String> sorted = new ArrayList<>(namespaces);
         Collections.sort(sorted);
-        return paginateList(sorted, offset, limit);
+        return Util.paginateList(sorted, offset, limit);
     }
 
     private String listDefinedData(int offset, int limit) {
@@ -581,13 +583,13 @@ public class GhidraMCPPlugin extends Plugin {
                     String valRepr = data.getDefaultValueRepresentation();
                     lines.add(String.format("%s: %s = %s",
                         data.getAddress(),
-                        escapeNonAscii(label),
-                        escapeNonAscii(valRepr)
+                        Util.escapeNonAscii(label),
+                        Util.escapeNonAscii(valRepr)
                     ));
                 }
             }
         }
-        return paginateList(lines, offset, limit);
+        return Util.paginateList(lines, offset, limit);
     }
 
     private String searchFunctionsByName(String searchTerm, int offset, int limit) {
@@ -609,7 +611,7 @@ public class GhidraMCPPlugin extends Plugin {
         if (matches.isEmpty()) {
             return "No functions matching '" + searchTerm + "'";
         }
-        return paginateList(matches, offset, limit);
+        return Util.paginateList(matches, offset, limit);
     }    
 
     // ----------------------------------------------------------------------------------
@@ -1407,7 +1409,7 @@ public class GhidraMCPPlugin extends Plugin {
                 refs.add(String.format("From %s%s [%s]", fromAddr, funcInfo, refType.getName()));
             }
             
-            return paginateList(refs, offset, limit);
+            return Util.paginateList(refs, offset, limit);
         } catch (Exception e) {
             return "Error getting references to address: " + e.getMessage();
         }
@@ -1446,7 +1448,7 @@ public class GhidraMCPPlugin extends Plugin {
                 refs.add(String.format("To %s%s [%s]", toAddr, targetInfo, refType.getName()));
             }
             
-            return paginateList(refs, offset, limit);
+            return Util.paginateList(refs, offset, limit);
         } catch (Exception e) {
             return "Error getting references from address: " + e.getMessage();
         }
@@ -1485,7 +1487,7 @@ public class GhidraMCPPlugin extends Plugin {
                 return "No references found to function: " + functionName;
             }
             
-            return paginateList(refs, offset, limit);
+            return Util.paginateList(refs, offset, limit);
         } catch (Exception e) {
             return "Error getting function references: " + e.getMessage();
         }
@@ -1514,7 +1516,7 @@ public class GhidraMCPPlugin extends Plugin {
             }
         }
         
-        return paginateList(lines, offset, limit);
+        return Util.paginateList(lines, offset, limit);
     }
 
     /**
@@ -1782,7 +1784,7 @@ public class GhidraMCPPlugin extends Plugin {
             if (filterLc != null && !name.toLowerCase().contains(filterLc)) continue;
             lines.add(String.format("%s @ %s [%s]", name, s.getAddress(), t.toString()));
         }
-        return paginateList(lines, offset, limit);
+        return Util.paginateList(lines, offset, limit);
     }
 
     /**
@@ -1881,9 +1883,9 @@ public class GhidraMCPPlugin extends Plugin {
             lines.add(String.format("%s [%s] %s",
                 b.getAddress(),
                 b.getCategory() == null ? "" : b.getCategory(),
-                escapeNonAscii(b.getComment() == null ? "" : b.getComment())));
+                Util.escapeNonAscii(b.getComment() == null ? "" : b.getComment())));
         }
-        return paginateList(lines, offset, limit);
+        return Util.paginateList(lines, offset, limit);
     }
 
     /**
@@ -2101,7 +2103,7 @@ public class GhidraMCPPlugin extends Plugin {
             lines.add(String.format("%s (size=%s)", path, len >= 0 ? Integer.toString(len) : "?"));
         }
         Collections.sort(lines);
-        return paginateList(lines, offset, limit);
+        return Util.paginateList(lines, offset, limit);
     }
 
     private String getDataTypeDefinition(String name) {
@@ -2158,7 +2160,7 @@ public class GhidraMCPPlugin extends Plugin {
         if (program == null) return "No program loaded";
 
         Object parsed;
-        try { parsed = MiniJson.parse(body); }
+        try { parsed = Util.MiniJson.parse(body); }
         catch (Exception e) { return "Invalid JSON: " + e.getMessage(); }
         if (!(parsed instanceof Map)) return "Expected JSON object at root";
 
@@ -2235,7 +2237,7 @@ public class GhidraMCPPlugin extends Plugin {
         if (program == null) return "No program loaded";
 
         Object parsed;
-        try { parsed = MiniJson.parse(body); }
+        try { parsed = Util.MiniJson.parse(body); }
         catch (Exception e) { return "Invalid JSON: " + e.getMessage(); }
         if (!(parsed instanceof Map)) return "Expected JSON object at root";
 
@@ -2400,267 +2402,9 @@ public class GhidraMCPPlugin extends Plugin {
         return success.get() ? ("Deleted: " + name) : ("Failed to delete: " + err);
     }
 
-    /**
-     * Minimal recursive-descent JSON parser. Returns null / Boolean / Long / Double /
-     * String / List<Object> / LinkedHashMap<String,Object>. Used by create_struct and
-     * create_enum, which accept objects with nested arrays. Scoped deliberately small —
-     * no streaming, no reviver, no custom numbers. Throws RuntimeException on bad input.
-     */
-    private static class MiniJson {
-        private final String s;
-        private int i;
-
-        private MiniJson(String s) { this.s = s; this.i = 0; }
-
-        static Object parse(String text) {
-            if (text == null) throw new RuntimeException("Empty body");
-            MiniJson p = new MiniJson(text);
-            p.skipWs();
-            Object v = p.parseValue();
-            p.skipWs();
-            if (p.i < p.s.length()) {
-                throw new RuntimeException("Unexpected trailing content at pos " + p.i);
-            }
-            return v;
-        }
-
-        private void skipWs() {
-            while (i < s.length() && Character.isWhitespace(s.charAt(i))) i++;
-        }
-
-        private Object parseValue() {
-            skipWs();
-            if (i >= s.length()) throw new RuntimeException("Unexpected end of input");
-            char c = s.charAt(i);
-            if (c == '"') return parseString();
-            if (c == '{') return parseObject();
-            if (c == '[') return parseArray();
-            if (c == '-' || (c >= '0' && c <= '9')) return parseNumber();
-            if (s.startsWith("null", i))  { i += 4; return null; }
-            if (s.startsWith("true", i))  { i += 4; return Boolean.TRUE; }
-            if (s.startsWith("false", i)) { i += 5; return Boolean.FALSE; }
-            throw new RuntimeException("Unexpected char '" + c + "' at pos " + i);
-        }
-
-        private String parseString() {
-            if (s.charAt(i) != '"') throw new RuntimeException("Expected '\"' at pos " + i);
-            i++;
-            StringBuilder out = new StringBuilder();
-            while (i < s.length()) {
-                char c = s.charAt(i++);
-                if (c == '"') return out.toString();
-                if (c == '\\') {
-                    if (i >= s.length()) throw new RuntimeException("Bad escape at EOF");
-                    char e = s.charAt(i++);
-                    switch (e) {
-                        case '"': out.append('"'); break;
-                        case '\\': out.append('\\'); break;
-                        case '/': out.append('/'); break;
-                        case 'b': out.append('\b'); break;
-                        case 'f': out.append('\f'); break;
-                        case 'n': out.append('\n'); break;
-                        case 'r': out.append('\r'); break;
-                        case 't': out.append('\t'); break;
-                        case 'u':
-                            if (i + 4 > s.length()) throw new RuntimeException("Bad unicode escape");
-                            out.append((char) Integer.parseInt(s.substring(i, i + 4), 16));
-                            i += 4;
-                            break;
-                        default: throw new RuntimeException("Bad escape \\" + e);
-                    }
-                } else {
-                    out.append(c);
-                }
-            }
-            throw new RuntimeException("Unterminated string");
-        }
-
-        private Number parseNumber() {
-            int start = i;
-            if (s.charAt(i) == '-') i++;
-            while (i < s.length() && Character.isDigit(s.charAt(i))) i++;
-            boolean fp = false;
-            if (i < s.length() && s.charAt(i) == '.') {
-                fp = true; i++;
-                while (i < s.length() && Character.isDigit(s.charAt(i))) i++;
-            }
-            if (i < s.length() && (s.charAt(i) == 'e' || s.charAt(i) == 'E')) {
-                fp = true; i++;
-                if (i < s.length() && (s.charAt(i) == '+' || s.charAt(i) == '-')) i++;
-                while (i < s.length() && Character.isDigit(s.charAt(i))) i++;
-            }
-            String t = s.substring(start, i);
-            return fp ? (Number) Double.parseDouble(t) : (Number) Long.parseLong(t);
-        }
-
-        private List<Object> parseArray() {
-            if (s.charAt(i) != '[') throw new RuntimeException("Expected '['");
-            i++;
-            skipWs();
-            List<Object> out = new ArrayList<>();
-            if (i < s.length() && s.charAt(i) == ']') { i++; return out; }
-            while (true) {
-                out.add(parseValue());
-                skipWs();
-                if (i >= s.length()) throw new RuntimeException("Unterminated array");
-                char c = s.charAt(i);
-                if (c == ',') { i++; skipWs(); continue; }
-                if (c == ']') { i++; return out; }
-                throw new RuntimeException("Expected ',' or ']' at pos " + i);
-            }
-        }
-
-        private Map<String, Object> parseObject() {
-            if (s.charAt(i) != '{') throw new RuntimeException("Expected '{'");
-            i++;
-            skipWs();
-            Map<String, Object> out = new LinkedHashMap<>();
-            if (i < s.length() && s.charAt(i) == '}') { i++; return out; }
-            while (true) {
-                skipWs();
-                String key = parseString();
-                skipWs();
-                if (i >= s.length() || s.charAt(i) != ':') throw new RuntimeException("Expected ':' at pos " + i);
-                i++;
-                Object v = parseValue();
-                out.put(key, v);
-                skipWs();
-                if (i >= s.length()) throw new RuntimeException("Unterminated object");
-                char c = s.charAt(i);
-                if (c == ',') { i++; continue; }
-                if (c == '}') { i++; return out; }
-                throw new RuntimeException("Expected ',' or '}' at pos " + i);
-            }
-        }
-    }
-
-    // ----------------------------------------------------------------------------------
-    // Utility: parse query params, parse post params, pagination, etc.
-    // ----------------------------------------------------------------------------------
-
-    /**
-     * Parse query parameters from the URL, e.g. ?offset=10&limit=100
-     */
-    private Map<String, String> parseQueryParams(HttpExchange exchange) {
-        Map<String, String> result = new HashMap<>();
-        String query = exchange.getRequestURI().getQuery(); // e.g. offset=10&limit=100
-        if (query != null) {
-            String[] pairs = query.split("&");
-            for (String p : pairs) {
-                String[] kv = p.split("=");
-                if (kv.length == 2) {
-                    // URL decode parameter values
-                    try {
-                        String key = URLDecoder.decode(kv[0], StandardCharsets.UTF_8);
-                        String value = URLDecoder.decode(kv[1], StandardCharsets.UTF_8);
-                        result.put(key, value);
-                    } catch (Exception e) {
-                        Msg.error(this, "Error decoding URL parameter", e);
-                    }
-                }
-            }
-        }
-        return result;
-    }
-
-    /**
-     * Read the request body as a UTF-8 string. Used by endpoints that accept
-     * JSON (create_struct, create_enum) instead of form-encoded data.
-     */
-    private String readBody(HttpExchange exchange) throws IOException {
-        return new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-    }
-
-    /**
-     * Parse post body form params, e.g. oldName=foo&newName=bar
-     */
-    private Map<String, String> parsePostParams(HttpExchange exchange) throws IOException {
-        byte[] body = exchange.getRequestBody().readAllBytes();
-        String bodyStr = new String(body, StandardCharsets.UTF_8);
-        Map<String, String> params = new HashMap<>();
-        for (String pair : bodyStr.split("&")) {
-            String[] kv = pair.split("=");
-            if (kv.length == 2) {
-                // URL decode parameter values
-                try {
-                    String key = URLDecoder.decode(kv[0], StandardCharsets.UTF_8);
-                    String value = URLDecoder.decode(kv[1], StandardCharsets.UTF_8);
-                    params.put(key, value);
-                } catch (Exception e) {
-                    Msg.error(this, "Error decoding URL parameter", e);
-                }
-            }
-        }
-        return params;
-    }
-
-    /**
-     * Convert a list of strings into one big newline-delimited string, applying offset & limit.
-     */
-    private String paginateList(List<String> items, int offset, int limit) {
-        int start = Math.max(0, offset);
-        int end   = Math.min(items.size(), offset + limit);
-
-        if (start >= items.size()) {
-            return ""; // no items in range
-        }
-        List<String> sub = items.subList(start, end);
-        return String.join("\n", sub);
-    }
-
-    /**
-     * Parse an integer from a string, or return defaultValue if null/invalid.
-     */
-    private int parseIntOrDefault(String val, int defaultValue) {
-        if (val == null) return defaultValue;
-        try {
-            return Integer.parseInt(val);
-        }
-        catch (NumberFormatException e) {
-            return defaultValue;
-        }
-    }
-
-    /**
-     * Parse a pagination limit: defaults when null/invalid, clamped to [0, MAX_LIMIT].
-     * Prevents a client from requesting an unbounded slice that blows up MCP context.
-     */
-    private int parseLimitOrDefault(String val, int defaultValue) {
-        int v = parseIntOrDefault(val, defaultValue);
-        if (v < 0) return 0;
-        return Math.min(v, MAX_LIMIT);
-    }
-
-    /**
-     * Escape non-ASCII chars to avoid potential decode issues.
-     */
-    private String escapeNonAscii(String input) {
-        if (input == null) return "";
-        StringBuilder sb = new StringBuilder();
-        for (char c : input.toCharArray()) {
-            if (c >= 32 && c < 127) {
-                sb.append(c);
-            }
-            else {
-                sb.append("\\x");
-                sb.append(Integer.toHexString(c & 0xFF));
-            }
-        }
-        return sb.toString();
-    }
-
     public Program getCurrentProgram() {
         ProgramManager pm = tool.getService(ProgramManager.class);
         return pm != null ? pm.getCurrentProgram() : null;
-    }
-
-    private void sendResponse(HttpExchange exchange, String response) throws IOException {
-        byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
-        exchange.sendResponseHeaders(200, bytes.length);
-        try (OutputStream os = exchange.getResponseBody()) {
-            os.write(bytes);
-        }
     }
 
     @Override
