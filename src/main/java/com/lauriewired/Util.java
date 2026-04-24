@@ -12,9 +12,12 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Helpers HTTP/JSON shared between GhidraMCPPlugin (CodeBrowser) and
@@ -139,6 +142,40 @@ public final class Util {
     /** Plugin semantic version, surfaced by /health and /version. */
     public static final String PLUGIN_VERSION = "1.0-SNAPSHOT";
 
+    // Lightweight request counting. ConcurrentHashMap for read-mostly access
+    // from many worker threads; AtomicLong per endpoint to avoid a map-level
+    // lock on every increment. Not exposed as a public collection so callers
+    // can't mutate it — snapshots are taken via buildStatsSnapshot().
+    private static final Map<String, AtomicLong> REQUESTS_BY_PATH = new ConcurrentHashMap<>();
+    private static final AtomicLong TOTAL_REQUESTS = new AtomicLong();
+    private static final AtomicLong TOTAL_RESPONSE_BYTES = new AtomicLong();
+
+    private static void recordRequest(HttpExchange exchange, int bodyBytes) {
+        try {
+            String path = exchange.getRequestURI().getPath();
+            REQUESTS_BY_PATH.computeIfAbsent(path, k -> new AtomicLong()).incrementAndGet();
+            TOTAL_REQUESTS.incrementAndGet();
+            TOTAL_RESPONSE_BYTES.addAndGet(bodyBytes);
+        } catch (Exception ignore) { /* never let metrics break the response */ }
+    }
+
+    /** Snapshot of request counters for /stats. */
+    public static Map<String, Object> buildStatsSnapshot() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        long up = Math.max(1, uptimeSeconds());
+        out.put("uptime_sec", uptimeSeconds());
+        long total = TOTAL_REQUESTS.get();
+        out.put("total_requests", total);
+        out.put("requests_per_sec", String.format("%.3f", (double) total / up));
+        out.put("total_response_bytes", TOTAL_RESPONSE_BYTES.get());
+        Map<String, Long> byPath = new TreeMap<>();
+        for (Map.Entry<String, AtomicLong> e : REQUESTS_BY_PATH.entrySet()) {
+            byPath.put(e.getKey(), e.getValue().get());
+        }
+        out.put("by_endpoint", byPath);
+        return out;
+    }
+
     /** Safety cap on any single HTTP response body sent by the plugin. 256 KB
      *  is large enough for decompiled functions and sizeable listings, and
      *  small enough to avoid blowing up the MCP client's context window when
@@ -168,6 +205,7 @@ public final class Util {
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
+        recordRequest(exchange, bytes.length);
     }
 
     /**
@@ -255,6 +293,7 @@ public final class Util {
         try (OutputStream os = exchange.getResponseBody()) {
             os.write(bytes);
         }
+        recordRequest(exchange, bytes.length);
     }
 
     /**

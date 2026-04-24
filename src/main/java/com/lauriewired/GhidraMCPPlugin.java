@@ -361,13 +361,14 @@ public class GhidraMCPPlugin extends Plugin {
             Util.sendJson(exchange, buildInstructionInfoJson(qparams.get("address")));
         });
 
-        // ---- Observability (health/version) ----
+        // ---- Observability (health/version/stats) ----
         server.createContext("/health", exchange -> Util.sendJson(exchange, buildHealthJson()));
         server.createContext("/version", exchange -> Util.sendResponse(exchange,
             "plugin=" + Util.PLUGIN_VERSION
             + "\nghidra=" + safeGhidraVersion()
             + "\ntool=" + tool.getName()
             + "\nuptime_sec=" + Util.uptimeSeconds()));
+        server.createContext("/stats", exchange -> Util.sendJson(exchange, Util.toJson(Util.buildStatsSnapshot())));
 
         // ---- Multi-program awareness ----
         server.createContext("/list_programs", exchange -> {

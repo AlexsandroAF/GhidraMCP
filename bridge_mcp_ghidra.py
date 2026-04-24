@@ -368,6 +368,19 @@ def dbg_version() -> str:
     return "\n".join(safe_get_dbg("version"))
 
 @mcp.tool()
+def stats() -> str:
+    """JSON counters for the CodeBrowser plugin server: total_requests,
+    requests_per_sec (smoothed over uptime), total_response_bytes, and a
+    per-endpoint counter (`by_endpoint: {path: count}`). Useful to debug
+    "is my tool even hitting the server" and to spot hot paths."""
+    return "\n".join(safe_get("stats"))
+
+@mcp.tool()
+def dbg_stats() -> str:
+    """Same as stats but for the Debugger plugin server (port 18081)."""
+    return "\n".join(safe_get_dbg("stats"))
+
+@mcp.tool()
 def list_programs() -> list:
     """List every Program currently open in the CodeBrowser tool. Each line
     is `* /path/to/file (name=<short>)` — the leading `*` marks the current

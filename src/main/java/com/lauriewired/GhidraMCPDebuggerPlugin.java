@@ -125,6 +125,7 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
             + "\ntool=" + tool.getName()
             + "\nrole=debugger"
             + "\nuptime_sec=" + Util.uptimeSeconds()));
+        server.createContext("/stats", exchange -> Util.sendJson(exchange, Util.toJson(Util.buildStatsSnapshot())));
 
         // ---- Execution control ----
         // Steps return a diff JSON (before_pc/after_pc/instruction/changed_registers);
