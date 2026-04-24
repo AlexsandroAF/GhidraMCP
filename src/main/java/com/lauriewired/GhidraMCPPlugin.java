@@ -4,6 +4,11 @@ import ghidra.framework.plugintool.Plugin;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.GlobalNamespace;
+import ghidra.program.model.block.BasicBlockModel;
+import ghidra.program.model.block.CodeBlock;
+import ghidra.program.model.block.CodeBlockIterator;
+import ghidra.program.model.block.CodeBlockReference;
+import ghidra.program.model.block.CodeBlockReferenceIterator;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.*;
@@ -352,6 +357,11 @@ public class GhidraMCPPlugin extends Plugin {
         server.createContext("/get_instruction_info", exchange -> {
             Map<String, String> qparams = Util.parseQueryParams(exchange);
             Util.sendJson(exchange, buildInstructionInfoJson(qparams.get("address")));
+        });
+
+        server.createContext("/get_function_cfg", exchange -> {
+            Map<String, String> q = Util.parseQueryParams(exchange);
+            Util.sendJson(exchange, buildFunctionCfgJson(q.get("address")));
         });
 
         server.createContext("/get_callees_recursive", exchange -> {
@@ -958,6 +968,67 @@ public class GhidraMCPPlugin extends Plugin {
      * Gets a function at the given address or containing the address
      * @return the function or null if not found
      */
+    /**
+     * Control flow graph of a function as JSON: list of basic blocks with
+     * their address ranges and instruction counts, plus an edge list with
+     * flow types (FALL_THROUGH, CONDITIONAL_JUMP, UNCONDITIONAL_CALL, ...).
+     * Enables an agent to reason about conditionals, loops and early
+     * returns without re-parsing disassembly text.
+     */
+    private String buildFunctionCfgJson(String addressStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "{\"error\":\"No program loaded\"}";
+        if (addressStr == null || addressStr.isEmpty()) return "{\"error\":\"address is required\"}";
+        try {
+            Address addr = program.getAddressFactory().getAddress(addressStr);
+            if (addr == null) return "{\"error\":\"invalid address: " + addressStr + "\"}";
+            Function func = getFunctionForAddress(program, addr);
+            if (func == null) return "{\"error\":\"no function at or containing " + addressStr + "\"}";
+
+            BasicBlockModel model = new BasicBlockModel(program);
+            ConsoleTaskMonitor monitor = new ConsoleTaskMonitor();
+            List<Map<String, Object>> blocks = new ArrayList<>();
+            List<Map<String, Object>> edges = new ArrayList<>();
+
+            CodeBlockIterator it = model.getCodeBlocksContaining(func.getBody(), monitor);
+            while (it.hasNext()) {
+                CodeBlock block = it.next();
+                Map<String, Object> b = new LinkedHashMap<>();
+                b.put("start", block.getFirstStartAddress().toString());
+                b.put("end", block.getMaxAddress().toString());
+                b.put("name", block.getName());
+                int instrCount = 0;
+                InstructionIterator ii = program.getListing().getInstructions(block, true);
+                while (ii.hasNext()) { ii.next(); instrCount++; }
+                b.put("instrs_count", instrCount);
+                blocks.add(b);
+
+                CodeBlockReferenceIterator dests = block.getDestinations(monitor);
+                while (dests.hasNext()) {
+                    CodeBlockReference ref = dests.next();
+                    Map<String, Object> e = new LinkedHashMap<>();
+                    e.put("from", block.getFirstStartAddress().toString());
+                    e.put("to", ref.getDestinationAddress().toString());
+                    try { e.put("flow_type", ref.getFlowType().toString()); } catch (Exception ignore) {}
+                    edges.add(e);
+                }
+            }
+
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("function", func.getName() + "@" + func.getEntryPoint());
+            out.put("entry", func.getEntryPoint().toString());
+            out.put("blocks_count", blocks.size());
+            out.put("edges_count", edges.size());
+            out.put("blocks", blocks);
+            out.put("edges", edges);
+            return Util.toJson(out);
+        } catch (Exception e) {
+            return "{\"error\":\"" + e.getClass().getSimpleName() + ": "
+                + (e.getMessage() == null ? "" : e.getMessage().replace("\"", "'"))
+                + "\"}";
+        }
+    }
+
     /**
      * BFS over the call graph starting from the function at `address`.
      * direction=true walks callees (who does this function call?);

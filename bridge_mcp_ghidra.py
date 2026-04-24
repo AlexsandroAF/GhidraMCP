@@ -344,6 +344,16 @@ def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
     return safe_get("function_xrefs", {"name": name, "offset": offset, "limit": limit})
 
 @mcp.tool()
+def get_function_cfg(address: str) -> str:
+    """Control flow graph of the function at `address` as JSON. Returns
+    {function, entry, blocks_count, edges_count, blocks:[{start,end,name,
+    instrs_count}], edges:[{from,to,flow_type}]}. flow_type tells the
+    agent whether each edge is a fall-through, conditional jump,
+    unconditional call, etc — enough to reason about loops, ifs and
+    early returns without re-parsing disassembly."""
+    return "\n".join(safe_get("get_function_cfg", {"address": address}))
+
+@mcp.tool()
 def get_callees_recursive(address: str, depth: int = 2, limit: int = 200) -> str:
     """BFS traversal of the call graph from `address` walking callees.
     Returns JSON `{direction, root, depth, limit, truncated, count, nodes:[
