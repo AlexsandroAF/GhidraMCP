@@ -127,8 +127,30 @@ public final class Util {
         return sb.toString();
     }
 
+    /** Safety cap on any single HTTP response body sent by the plugin. 256 KB
+     *  is large enough for decompiled functions and sizeable listings, and
+     *  small enough to avoid blowing up the MCP client's context window when
+     *  a query accidentally matches too much. Override via Tool Options is a
+     *  future enhancement; for now it's a compile-time constant. */
+    public static final int MAX_RESPONSE_BYTES = 256 * 1024;
+
     public static void sendResponse(HttpExchange exchange, String response) throws IOException {
-        byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = (response == null ? "" : response).getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > MAX_RESPONSE_BYTES) {
+            int kept = MAX_RESPONSE_BYTES;
+            long dropped = (long) bytes.length - kept;
+            byte[] truncated = new byte[kept];
+            System.arraycopy(bytes, 0, truncated, 0, kept);
+            String suffix = "\n... [truncated, " + dropped + " more bytes — narrow your query or pass offset/limit]";
+            byte[] suffixBytes = suffix.getBytes(StandardCharsets.UTF_8);
+            // Make room for the suffix inside the cap so the total wire size
+            // stays under MAX_RESPONSE_BYTES even after appending it.
+            int newLen = Math.max(0, kept - suffixBytes.length);
+            byte[] out = new byte[newLen + suffixBytes.length];
+            System.arraycopy(truncated, 0, out, 0, newLen);
+            System.arraycopy(suffixBytes, 0, out, newLen, suffixBytes.length);
+            bytes = out;
+        }
         exchange.getResponseHeaders().set("Content-Type", "text/plain; charset=utf-8");
         exchange.sendResponseHeaders(200, bytes.length);
         try (OutputStream os = exchange.getResponseBody()) {
