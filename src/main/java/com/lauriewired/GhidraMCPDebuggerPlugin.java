@@ -191,6 +191,10 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
             var p = Util.parsePostParams(exchange);
             Util.sendResponse(exchange, executeCommand(p.get("command")));
         });
+        server.createContext("/dbg/execute_backend", exchange -> {
+            var p = Util.parsePostParams(exchange);
+            Util.sendResponse(exchange, executeBackendCommand(p.get("command")));
+        });
         server.createContext("/dbg/disconnect", exchange -> Util.sendResponse(exchange, disconnectSession()));
 
         // Thread pool so a long-running handler (launchProgram can stall 30s+ while
@@ -814,6 +818,37 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
         if (api.getCurrentTrace() == null) return "No active debug session";
         try {
             String out = api.executeCapture(command);
+            return out == null ? "" : out;
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    /**
+     * /dbg/execute sends raw text to a Python REPL where pybag isn't pre-
+     * imported — so to run `r rax` an agent would have to know the incantation
+     * `from pybag.dbgeng import util; util.dbg.cmd("r rax")`. That's plumbing
+     * no model has baked in, and getting it wrong returns a NameError.
+     *
+     * This endpoint does the import itself and forwards the user's string as
+     * a dbgeng command. Backends other than dbgeng (GDB, LLDB) are handled
+     * at /dbg/execute with their own native command syntax.
+     */
+    private String executeBackendCommand(String command) {
+        if (command == null || command.isEmpty()) return "command is required";
+        if (api.getCurrentTrace() == null) return "No active debug session";
+        // Escape the user's command for a Python double-quoted string.
+        String esc = command.replace("\\", "\\\\")
+                            .replace("\"", "\\\"")
+                            .replace("\r", "")
+                            .replace("\n", " ");
+        String py =
+            "from pybag.dbgeng import util as _dbgutil\n" +
+            "_dbg = _dbgutil.dbg\n" +
+            "_out = _dbg.cmd(\"" + esc + "\")\n" +
+            "print(_out if _out is not None else '')";
+        try {
+            String out = api.executeCapture(py);
             return out == null ? "" : out;
         } catch (Exception e) {
             return "Error: " + e.getMessage();

@@ -857,11 +857,25 @@ def dbg_launch_dbgeng(binary_path: str = "", args: str = "") -> str:
 
 @mcp.tool()
 def dbg_execute(command: str) -> str:
-    """Send a raw command string to the connected backend debugger (GDB, dbgeng,
-    LLDB) and capture its output. Escape hatch for anything the other dbg_*
-    tools don't expose — e.g. `info functions`, `x/10i $pc`, `bt`, custom
-    scripts. Requires an active trace/target."""
+    """Send raw text to the backend's own REPL. Namespace is minimal Python
+    (dbgeng target) or GDB/LLDB command syntax (those targets). Escape
+    hatch for anything the other dbg_* tools don't expose. Requires an
+    active trace. For dbgeng use dbg_execute_backend instead — this one
+    forces the caller to know pybag plumbing."""
     return safe_post_dbg("dbg/execute", {"command": command})
+
+@mcp.tool()
+def dbg_execute_backend(command: str) -> str:
+    """Send a native dbgeng/WinDbg command to the connected target. Plugin
+    wraps it with `pybag.dbgeng.util.dbg.cmd(...)` so the agent doesn't
+    need Python plumbing knowledge. Examples:
+      - `r rax`     read register
+      - `u rip L4`  disassemble 4 instructions at PC
+      - `k`         stack backtrace
+      - `lm`        loaded modules
+      - `dd rsp L8` dump stack
+    Returns the raw command output. Requires active dbgeng trace."""
+    return safe_post_dbg("dbg/execute_backend", {"command": command})
 
 @mcp.tool()
 def dbg_disconnect() -> str:
