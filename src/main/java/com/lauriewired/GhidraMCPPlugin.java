@@ -15,6 +15,8 @@ import ghidra.program.model.block.CodeBlockReferenceIterator;
 import ghidra.program.model.listing.*;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.*;
+import ghidra.program.model.symbol.Equate;
+import ghidra.program.model.symbol.EquateTable;
 import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.model.symbol.Reference;
 import ghidra.program.model.symbol.ReferenceIterator;
@@ -360,6 +362,24 @@ public class GhidraMCPPlugin extends Plugin {
         server.createContext("/get_instruction_info", exchange -> {
             Map<String, String> qparams = Util.parseQueryParams(exchange);
             Util.sendJsonAuto(exchange, buildInstructionInfoJson(qparams.get("address")));
+        });
+
+        server.createContext("/apply_enum_value", exchange -> {
+            Map<String, String> p = Util.parsePostParams(exchange);
+            int opIdx = Util.parseIntOrDefault(p.get("operand_index"), 0);
+            long value;
+            try {
+                String v = p.get("value");
+                if (v == null) { Util.sendResponse(exchange, "value is required"); return; }
+                v = v.trim();
+                value = v.startsWith("0x") || v.startsWith("0X")
+                    ? Long.parseLong(v.substring(2), 16)
+                    : Long.parseLong(v);
+            } catch (NumberFormatException nfe) {
+                Util.sendResponse(exchange, "invalid value: " + p.get("value"));
+                return;
+            }
+            Util.sendResponse(exchange, applyEnumValue(p.get("address"), opIdx, p.get("enum_name"), value));
         });
 
         server.createContext("/undo", exchange -> {
@@ -1030,6 +1050,70 @@ public class GhidraMCPPlugin extends Plugin {
      * Gets a function at the given address or containing the address
      * @return the function or null if not found
      */
+    /**
+     * Replace a numeric operand in the disassembly with the symbolic name
+     * from an enum data type. Ghidra calls this an "equate": the byte value
+     * in the instruction stays the same, but the listing and decompile
+     * render it as "MY_ENUM::MEMBER" instead of "0x42".
+     *
+     * Looks up the enum by name, finds which member has the given value,
+     * creates/reuses an Equate with the convention-matching name, and
+     * binds it to the operand at (address, operand_index).
+     */
+    @SuppressWarnings("unchecked")
+    private String applyEnumValue(String addrStr, int operandIndex, String enumName, long value) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addrStr == null || addrStr.isEmpty()) return "address is required";
+        if (enumName == null || enumName.isEmpty()) return "enum_name is required";
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        DataType dt = findDataTypeByNameInAllCategories(dtm, enumName);
+        if (!(dt instanceof ghidra.program.model.data.Enum)) {
+            return "Not an enum in the Data Type Manager: " + enumName;
+        }
+        ghidra.program.model.data.Enum en = (ghidra.program.model.data.Enum) dt;
+        String memberName;
+        try { memberName = en.getName(value); }
+        catch (Exception e) { return "Error looking up enum value: " + e.getMessage(); }
+        if (memberName == null) {
+            return "Value 0x" + Long.toHexString(value) + " not defined in enum " + enumName;
+        }
+        final String equateName = enumName + "::" + memberName;
+
+        AtomicBoolean ok = new AtomicBoolean(false);
+        StringBuilder err = new StringBuilder();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Apply enum " + equateName);
+                try {
+                    Address addr = program.getAddressFactory().getAddress(addrStr);
+                    if (addr == null) { err.append("invalid address: ").append(addrStr); return; }
+                    EquateTable et = program.getEquateTable();
+                    Equate eq = et.getEquate(equateName);
+                    if (eq != null && eq.getValue() != value) {
+                        err.append("equate '").append(equateName).append("' already exists with different value ")
+                           .append(eq.getValue());
+                        return;
+                    }
+                    if (eq == null) eq = et.createEquate(equateName, value);
+                    eq.addReference(addr, operandIndex);
+                    ok.set(true);
+                } catch (Exception e) {
+                    err.append(e.getClass().getSimpleName()).append(": ").append(e.getMessage());
+                    Msg.error(this, "apply_enum_value error", e);
+                } finally {
+                    program.endTransaction(tx, ok.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Swing error: " + e.getMessage();
+        }
+        return ok.get()
+            ? ("Applied " + equateName + " to operand " + operandIndex + " at " + addrStr)
+            : ("Failed: " + err);
+    }
+
     /**
      * Undo the last N transactions on the current program. Stops short if
      * the undo stack runs out. Every mutation from the plugin (rename,

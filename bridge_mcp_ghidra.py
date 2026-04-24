@@ -368,6 +368,24 @@ def dbg_version() -> str:
     return "\n".join(safe_get_dbg("version"))
 
 @mcp.tool()
+def apply_enum_value(address: str, operand_index: int, enum_name: str, value: str) -> str:
+    """Replace a numeric operand in the disassembly with the symbolic name
+    from an enum. For an instruction like `push 0x42`, applying enum
+    MY_FLAGS where member FOO=0x42 changes the listing and decompile to
+    render it as `push MY_FLAGS::FOO`. The bytes don't change — only the
+    presentation.
+
+    `operand_index` is 0-based (most simple instructions use 0). `value`
+    accepts decimal or `0x..` hex. The enum must exist in the Data Type
+    Manager (use create_enum to make one first)."""
+    return safe_post("apply_enum_value", {
+        "address": address,
+        "operand_index": operand_index,
+        "enum_name": enum_name,
+        "value": value,
+    })
+
+@mcp.tool()
 def undo(count: int = 1) -> str:
     """Undo the last `count` transactions on the current program. Every
     mutation (rename, set_comment, apply_data_type, create_struct, ...)
