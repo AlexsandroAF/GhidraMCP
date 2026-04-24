@@ -384,24 +384,43 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
             pc != null ? pc.toString() : "(unknown)");
     }
 
+    // x86/x64 general-purpose set the agent actually reads when inspecting
+    // call state. Explicit whitelist beats a broad else-branch: dbgeng exposes
+    // DR*, CR*, BND*, bit-flags (CF/ZF/PF/...), decoder internals
+    // (rexWprefix, longMode, evex*) and FPU state as top-level names too.
+    // We bucket those out instead of pretending they're "general".
+    private static final java.util.Set<String> GENERAL_REGS = java.util.Set.of(
+        "RAX", "RBX", "RCX", "RDX", "RSI", "RDI", "RBP", "RSP",
+        "R8", "R9", "R10", "R11", "R12", "R13", "R14", "R15",
+        "EAX", "EBX", "ECX", "EDX", "ESI", "EDI", "EBP", "ESP",
+        "R8D", "R9D", "R10D", "R11D", "R12D", "R13D", "R14D", "R15D",
+        "RIP", "EIP",
+        "RFLAGS", "EFLAGS", "FLAGS", "rflags", "eflags", "flags",
+        "CS", "DS", "ES", "FS", "GS", "SS", "FS_OFFSET", "GS_OFFSET"
+    );
+
     /**
-     * Classify a register by name into general / float / vector. Heuristic:
-     * XMM, YMM, ZMM and K* are SIMD/mask (vector); ST, MM and FPR prefixes
-     * are x87/MMX (float); everything else is treated as general purpose
-     * (RAX, RBX, RIP, RFLAGS, segment regs, etc). Good enough for x86/x64;
-     * agents can always request filter=all to get the full dump.
+     * Classify a register by name into general / float / vector.
+     *  - general: explicit whitelist of the x86/x64 GP registers + RIP +
+     *    RFLAGS + segment regs (no sub-registers like AX/AL, no bit flags,
+     *    no debug/control registers, no decoder internals).
+     *  - vector: XMM/YMM/ZMM, K0-K7 mask registers, MXCSR.
+     *  - float: x87 ST*, MMX MM*, FPR*, FPU* control words.
+     *  - everything else ends up in "other" and is visible only with filter=all.
      */
     private static String regCategory(String name) {
+        if (GENERAL_REGS.contains(name)) return "general";
         String u = name.toUpperCase();
         if (u.startsWith("XMM") || u.startsWith("YMM") || u.startsWith("ZMM")
-                || (u.length() == 2 && u.charAt(0) == 'K' && Character.isDigit(u.charAt(1)))) {
+                || (u.length() == 2 && u.charAt(0) == 'K' && Character.isDigit(u.charAt(1)))
+                || u.equals("MXCSR")) {
             return "vector";
         }
         if (u.startsWith("ST") || u.startsWith("MM") || u.startsWith("FPR")
-                || u.equals("FPCW") || u.equals("FPSW") || u.equals("FPTW")) {
+                || u.startsWith("FPU") || u.equals("FPCW") || u.equals("FPSW") || u.equals("FPTW")) {
             return "float";
         }
-        return "general";
+        return "other";
     }
 
     private String readRegistersString(String filter) {
