@@ -275,6 +275,58 @@ public final class Util {
     }
 
     /**
+     * Emit a JSON error document with an explicit HTTP status code.
+     * Body shape: {"error": "...", "code": N}. Callers pick the code:
+     *   400 for malformed input (missing/invalid query param)
+     *   404 when the resource (function, instruction, launcher) isn't there
+     *   503 when the plugin is alive but the feature depends on state that
+     *       isn't current (no program loaded, no debug session)
+     *   500 for unhandled exceptions
+     * Picked only 4xx/5xx codes an agent can special-case meaningfully.
+     */
+    public static void sendError(HttpExchange exchange, int status, String message) throws IOException {
+        String safe = message == null ? "" : message.replace("\\", "\\\\").replace("\"", "\\\"")
+                                                    .replace("\n", " ").replace("\r", "");
+        String body = "{\"error\":\"" + safe + "\",\"code\":" + status + "}";
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        exchange.sendResponseHeaders(status, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
+        recordRequest(exchange, bytes.length);
+    }
+
+    /** Inspect a JSON body built by a handler and route to sendError with a
+     *  status guessed from its text, or sendJson with 200 if no error field.
+     *  Heuristic — keeps the refactor bounded without migrating every handler
+     *  to a code-carrying return type. */
+    public static void sendJsonAuto(HttpExchange exchange, String jsonBody) throws IOException {
+        if (jsonBody != null && jsonBody.startsWith("{\"error\":")) {
+            int code = 400;
+            String lc = jsonBody.toLowerCase();
+            if (lc.contains("no program loaded") || lc.contains("no active debug session")) code = 503;
+            else if (lc.contains("not found") || lc.contains("no function") || lc.contains("no instruction")
+                 || lc.contains("launcher not found")) code = 404;
+            // Strip the already-embedded {"error":"..."} wrapper so we don't
+            // double-nest the message; extract the raw text.
+            String msg = jsonBody;
+            int s = jsonBody.indexOf("\"error\":\"");
+            if (s >= 0) {
+                int start = s + "\"error\":\"".length();
+                int end = jsonBody.indexOf("\"", start);
+                while (end > 0 && jsonBody.charAt(end - 1) == '\\') {
+                    end = jsonBody.indexOf("\"", end + 1);
+                }
+                if (end > start) msg = jsonBody.substring(start, end);
+            }
+            sendError(exchange, code, msg);
+            return;
+        }
+        sendJson(exchange, jsonBody);
+    }
+
+    /**
      * Send a JSON response with application/json Content-Type and the size
      * cap from sendResponse. The body argument is written verbatim — build
      * it with toJson().

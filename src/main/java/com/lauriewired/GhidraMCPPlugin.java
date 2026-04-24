@@ -353,12 +353,12 @@ public class GhidraMCPPlugin extends Plugin {
 
         server.createContext("/get_function_info", exchange -> {
             Map<String, String> qparams = Util.parseQueryParams(exchange);
-            Util.sendJson(exchange, buildFunctionInfoJson(qparams.get("address")));
+            Util.sendJsonAuto(exchange, buildFunctionInfoJson(qparams.get("address")));
         });
 
         server.createContext("/get_instruction_info", exchange -> {
             Map<String, String> qparams = Util.parseQueryParams(exchange);
-            Util.sendJson(exchange, buildInstructionInfoJson(qparams.get("address")));
+            Util.sendJsonAuto(exchange, buildInstructionInfoJson(qparams.get("address")));
         });
 
         // ---- Observability (health/version/stats) ----
@@ -404,21 +404,21 @@ public class GhidraMCPPlugin extends Plugin {
 
         server.createContext("/get_function_cfg", exchange -> {
             Map<String, String> q = Util.parseQueryParams(exchange);
-            Util.sendJson(exchange, buildFunctionCfgJson(q.get("address")));
+            Util.sendJsonAuto(exchange, buildFunctionCfgJson(q.get("address")));
         });
 
         server.createContext("/get_callees_recursive", exchange -> {
             Map<String, String> q = Util.parseQueryParams(exchange);
             int depth = Util.parseIntOrDefault(q.get("depth"), 2);
             int limit = Util.parseIntOrDefault(q.get("limit"), 200);
-            Util.sendJson(exchange, buildCallGraphJson(q.get("address"), depth, limit, true));
+            Util.sendJsonAuto(exchange, buildCallGraphJson(q.get("address"), depth, limit, true));
         });
 
         server.createContext("/get_callers_recursive", exchange -> {
             Map<String, String> q = Util.parseQueryParams(exchange);
             int depth = Util.parseIntOrDefault(q.get("depth"), 2);
             int limit = Util.parseIntOrDefault(q.get("limit"), 200);
-            Util.sendJson(exchange, buildCallGraphJson(q.get("address"), depth, limit, false));
+            Util.sendJsonAuto(exchange, buildCallGraphJson(q.get("address"), depth, limit, false));
         });
 
         server.createContext("/list_functions_filtered", exchange -> {
