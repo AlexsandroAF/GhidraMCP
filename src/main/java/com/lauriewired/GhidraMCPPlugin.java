@@ -361,6 +361,15 @@ public class GhidraMCPPlugin extends Plugin {
             Util.sendJson(exchange, buildInstructionInfoJson(qparams.get("address")));
         });
 
+        // ---- Multi-program awareness ----
+        server.createContext("/list_programs", exchange -> {
+            Util.sendResponse(exchange, listPrograms());
+        });
+        server.createContext("/switch_program", exchange -> {
+            Map<String, String> p = Util.parsePostParams(exchange);
+            Util.sendResponse(exchange, switchProgram(p.get("path")));
+        });
+
         // ---- Agent workspace (notes persistidas no Program Options) ----
         server.createContext("/agent/note_set", exchange -> {
             Map<String, String> p = Util.parsePostParams(exchange);
@@ -993,6 +1002,57 @@ public class GhidraMCPPlugin extends Plugin {
      * Gets a function at the given address or containing the address
      * @return the function or null if not found
      */
+    // ------------------------------------------------------------------
+    // Multi-program awareness: list everything the ProgramManager has
+    // open in this tool and let the agent switch the "current" one.
+    // Useful for agents analysing multi-binary projects (malware sample
+    // + extracted payload, main exe + a bunch of DLLs).
+    // ------------------------------------------------------------------
+    private String listPrograms() {
+        ProgramManager pm = tool.getService(ProgramManager.class);
+        if (pm == null) return "ProgramManager not available";
+        Program[] all = pm.getAllOpenPrograms();
+        if (all == null || all.length == 0) return "No programs open";
+        Program current = pm.getCurrentProgram();
+        StringBuilder sb = new StringBuilder();
+        for (Program p : all) {
+            boolean isCurrent = (p == current);
+            sb.append(isCurrent ? "* " : "  ")
+              .append(p.getDomainFile().getPathname())
+              .append(" (name=").append(p.getName()).append(")")
+              .append('\n');
+        }
+        return sb.toString();
+    }
+
+    private String switchProgram(String pathOrName) {
+        ProgramManager pm = tool.getService(ProgramManager.class);
+        if (pm == null) return "ProgramManager not available";
+        if (pathOrName == null || pathOrName.isEmpty()) return "path is required";
+        Program[] all = pm.getAllOpenPrograms();
+        if (all == null) return "No programs open";
+        Program found = null;
+        for (Program p : all) {
+            if (pathOrName.equals(p.getDomainFile().getPathname())
+                    || pathOrName.equals(p.getName())) {
+                found = p;
+                break;
+            }
+        }
+        if (found == null) return "Program not found: " + pathOrName;
+        final Program target = found;
+        AtomicBoolean ok = new AtomicBoolean(false);
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                pm.setCurrentProgram(target);
+                ok.set(true);
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Swing error: " + e.getMessage();
+        }
+        return ok.get() ? ("Switched to: " + target.getName()) : "Failed to switch";
+    }
+
     // ------------------------------------------------------------------
     // Agent workspace: small KV store persisted on the Program itself.
     // Stored under Options category "GhidraMCP.AgentNotes" — survives a

@@ -344,6 +344,21 @@ def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
     return safe_get("function_xrefs", {"name": name, "offset": offset, "limit": limit})
 
 @mcp.tool()
+def list_programs() -> list:
+    """List every Program currently open in the CodeBrowser tool. Each line
+    is `* /path/to/file (name=<short>)` — the leading `*` marks the current
+    program. Use `switch_program` to change focus."""
+    return safe_get("list_programs")
+
+@mcp.tool()
+def switch_program(path: str) -> str:
+    """Set the current Program by pathname (as shown in list_programs) or
+    by short name. Subsequent tools that use the current program (decompile,
+    get_function_info, etc) operate on the new target. Returns
+    'Switched to: <name>' on success."""
+    return safe_post("switch_program", {"path": path})
+
+@mcp.tool()
 def note_set(key: str, value: str) -> str:
     """Save a key→value note on the current Program. Persists when the user
     saves the Program file, so state the agent built up (hypotheses,
