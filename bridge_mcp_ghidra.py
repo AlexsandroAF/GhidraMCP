@@ -344,6 +344,24 @@ def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
     return safe_get("function_xrefs", {"name": name, "offset": offset, "limit": limit})
 
 @mcp.tool()
+def get_callees_recursive(address: str, depth: int = 2, limit: int = 200) -> str:
+    """BFS traversal of the call graph from `address` walking callees.
+    Returns JSON `{direction, root, depth, limit, truncated, count, nodes:[
+    {name, entry, depth, parent}]}`. Depth is clamped to [0,6] and the walk
+    stops when `limit` nodes are visited. Useful to understand what a function
+    ends up touching without chaining dozens of single-level /xrefs calls."""
+    return "\n".join(safe_get("get_callees_recursive",
+        {"address": address, "depth": depth, "limit": limit}))
+
+@mcp.tool()
+def get_callers_recursive(address: str, depth: int = 2, limit: int = 200) -> str:
+    """BFS up the call graph from `address`. Same JSON shape as
+    get_callees_recursive but returns the ancestors (who eventually reaches
+    this function). Useful for threat modelling: 'who can trigger this'."""
+    return "\n".join(safe_get("get_callers_recursive",
+        {"address": address, "depth": depth, "limit": limit}))
+
+@mcp.tool()
 def list_functions_filtered(offset: int = 0, limit: int = 100,
                             segment: str = None, complexity_min: int = 0,
                             has_xrefs: bool = None, filter: str = None) -> list:

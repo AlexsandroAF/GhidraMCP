@@ -354,6 +354,20 @@ public class GhidraMCPPlugin extends Plugin {
             Util.sendJson(exchange, buildInstructionInfoJson(qparams.get("address")));
         });
 
+        server.createContext("/get_callees_recursive", exchange -> {
+            Map<String, String> q = Util.parseQueryParams(exchange);
+            int depth = Util.parseIntOrDefault(q.get("depth"), 2);
+            int limit = Util.parseIntOrDefault(q.get("limit"), 200);
+            Util.sendJson(exchange, buildCallGraphJson(q.get("address"), depth, limit, true));
+        });
+
+        server.createContext("/get_callers_recursive", exchange -> {
+            Map<String, String> q = Util.parseQueryParams(exchange);
+            int depth = Util.parseIntOrDefault(q.get("depth"), 2);
+            int limit = Util.parseIntOrDefault(q.get("limit"), 200);
+            Util.sendJson(exchange, buildCallGraphJson(q.get("address"), depth, limit, false));
+        });
+
         server.createContext("/list_functions_filtered", exchange -> {
             Map<String, String> q = Util.parseQueryParams(exchange);
             int offset = Util.parseIntOrDefault(q.get("offset"), 0);
@@ -944,6 +958,77 @@ public class GhidraMCPPlugin extends Plugin {
      * Gets a function at the given address or containing the address
      * @return the function or null if not found
      */
+    /**
+     * BFS over the call graph starting from the function at `address`.
+     * direction=true walks callees (who does this function call?);
+     * false walks callers (who calls this function?). Result is a flat
+     * list of {name, entry, depth, parent} rows — easier for an agent
+     * to iterate than nested trees and cheap to build.
+     */
+    private String buildCallGraphJson(String addressStr, int depth, int limit, boolean callees) {
+        Program program = getCurrentProgram();
+        if (program == null) return "{\"error\":\"No program loaded\"}";
+        if (addressStr == null || addressStr.isEmpty()) return "{\"error\":\"address is required\"}";
+        if (depth < 0) depth = 0;
+        if (depth > 6) depth = 6;
+        if (limit < 1) limit = 1;
+
+        try {
+            Address addr = program.getAddressFactory().getAddress(addressStr);
+            if (addr == null) return "{\"error\":\"invalid address: " + addressStr + "\"}";
+            Function root = getFunctionForAddress(program, addr);
+            if (root == null) return "{\"error\":\"no function at or containing " + addressStr + "\"}";
+
+            ConsoleTaskMonitor monitor = new ConsoleTaskMonitor();
+            List<Map<String, Object>> rows = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+            java.util.Deque<Object[]> queue = new java.util.ArrayDeque<>();
+            queue.add(new Object[]{root, 0, (String) null});
+            seen.add(root.getEntryPoint().toString());
+
+            boolean truncated = false;
+            while (!queue.isEmpty()) {
+                Object[] it = queue.pollFirst();
+                Function f = (Function) it[0];
+                int d = (Integer) it[1];
+                String parent = (String) it[2];
+
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("name", f.getName());
+                row.put("entry", f.getEntryPoint().toString());
+                row.put("depth", d);
+                if (parent != null) row.put("parent", parent);
+                rows.add(row);
+                if (rows.size() >= limit) { truncated = true; break; }
+
+                if (d >= depth) continue;
+                Set<Function> next = callees
+                    ? f.getCalledFunctions(monitor)
+                    : f.getCallingFunctions(monitor);
+                for (Function n : next) {
+                    String key = n.getEntryPoint().toString();
+                    if (seen.add(key)) {
+                        queue.add(new Object[]{n, d + 1, f.getName() + "@" + f.getEntryPoint()});
+                    }
+                }
+            }
+
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("direction", callees ? "callees" : "callers");
+            out.put("root", root.getName() + "@" + root.getEntryPoint());
+            out.put("depth", depth);
+            out.put("limit", limit);
+            out.put("truncated", truncated);
+            out.put("count", rows.size());
+            out.put("nodes", rows);
+            return Util.toJson(out);
+        } catch (Exception e) {
+            return "{\"error\":\"" + e.getClass().getSimpleName() + ": "
+                + (e.getMessage() == null ? "" : e.getMessage().replace("\"", "'"))
+                + "\"}";
+        }
+    }
+
     /**
      * Paginated + filtered function listing built for agents working on
      * large binaries. /methods dumps everything and blows the context
