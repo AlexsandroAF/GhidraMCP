@@ -368,6 +368,14 @@ def dbg_version() -> str:
     return "\n".join(safe_get_dbg("version"))
 
 @mcp.tool()
+def list_comments(offset: int = 0, limit: int = 100, type: str = "all") -> list:
+    """List every comment in the program. Each line is `ADDR [TYPE] text`.
+    `type` restricts to a single kind: EOL, PRE, POST, PLATE or REPEATABLE;
+    default `all` walks the five kinds. Paginated via offset/limit. Useful
+    when picking up a session — see what annotations already exist."""
+    return safe_get("list_comments", {"offset": offset, "limit": limit, "type": type})
+
+@mcp.tool()
 def stats() -> str:
     """JSON counters for the CodeBrowser plugin server: total_requests,
     requests_per_sec (smoothed over uptime), total_response_bytes, and a

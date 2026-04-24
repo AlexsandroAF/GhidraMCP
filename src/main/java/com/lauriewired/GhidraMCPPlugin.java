@@ -3,6 +3,7 @@ package com.lauriewired;
 import ghidra.framework.plugintool.Plugin;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressIterator;
 import ghidra.program.model.address.AddressRange;
 import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.GlobalNamespace;
@@ -359,6 +360,13 @@ public class GhidraMCPPlugin extends Plugin {
         server.createContext("/get_instruction_info", exchange -> {
             Map<String, String> qparams = Util.parseQueryParams(exchange);
             Util.sendJsonAuto(exchange, buildInstructionInfoJson(qparams.get("address")));
+        });
+
+        server.createContext("/list_comments", exchange -> {
+            Map<String, String> q = Util.parseQueryParams(exchange);
+            int offset = Util.parseIntOrDefault(q.get("offset"), 0);
+            int limit = Util.parseLimitOrDefault(q.get("limit"), 100);
+            Util.sendResponse(exchange, listComments(offset, limit, q.get("type")));
         });
 
         // ---- Observability (health/version/stats) ----
@@ -1011,6 +1019,52 @@ public class GhidraMCPPlugin extends Plugin {
      * Gets a function at the given address or containing the address
      * @return the function or null if not found
      */
+    /**
+     * Enumerate every comment on the current program. Each line:
+     *   ADDR [TYPE] text
+     * TYPE is one of EOL, PRE, POST, PLATE, REPEATABLE. Filter with
+     * ?type=EOL (or any other) to restrict; default "all" walks all 5 kinds.
+     * Paginated via offset/limit.
+     */
+    private String listComments(int offset, int limit, String typeStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        CommentType[] types;
+        if (typeStr == null || typeStr.isEmpty() || typeStr.equalsIgnoreCase("all")) {
+            types = new CommentType[] {
+                CommentType.EOL, CommentType.PRE, CommentType.POST,
+                CommentType.PLATE, CommentType.REPEATABLE
+            };
+        } else {
+            try {
+                types = new CommentType[] { CommentType.valueOf(typeStr.toUpperCase()) };
+            } catch (IllegalArgumentException e) {
+                return "Invalid type: " + typeStr
+                    + " (use EOL|PRE|POST|PLATE|REPEATABLE|all)";
+            }
+        }
+        Listing listing = program.getListing();
+        List<String> lines = new ArrayList<>();
+        for (CommentType ct : types) {
+            try {
+                AddressIterator it = listing.getCommentAddressIterator(ct, program.getMemory(), true);
+                while (it.hasNext()) {
+                    Address a = it.next();
+                    String c = listing.getComment(ct, a);
+                    if (c != null && !c.isEmpty()) {
+                        lines.add(a.toString() + " [" + ct.name() + "] "
+                            + Util.escapeNonAscii(c.replace('\n', ' ')));
+                    }
+                }
+            } catch (Exception e) {
+                Msg.error(this, "Error iterating comments of type " + ct, e);
+            }
+        }
+        Collections.sort(lines);
+        if (lines.isEmpty()) return "No comments";
+        return Util.paginateList(lines, offset, limit);
+    }
+
     // ------------------------------------------------------------------
     // Observability: /health summarises plugin + Ghidra state in JSON so
     // clients can confirm the server is live and which program is active
