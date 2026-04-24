@@ -159,6 +159,93 @@ public final class Util {
     }
 
     /**
+     * Serialize a Java value to a compact JSON string. Symmetric counterpart
+     * to MiniJson.parse — handles null / Boolean / Number / CharSequence /
+     * Map / Iterable. Anything else is toString()'d and emitted as a JSON
+     * string. Cycles are not detected; don't pass recursive graphs.
+     */
+    public static String toJson(Object value) {
+        StringBuilder sb = new StringBuilder();
+        appendJson(sb, value);
+        return sb.toString();
+    }
+
+    private static void appendJson(StringBuilder sb, Object v) {
+        if (v == null) { sb.append("null"); return; }
+        if (v instanceof Boolean) { sb.append(((Boolean) v).booleanValue() ? "true" : "false"); return; }
+        if (v instanceof Number) { sb.append(v.toString()); return; }
+        if (v instanceof Map) {
+            sb.append('{');
+            boolean first = true;
+            for (Map.Entry<?, ?> e : ((Map<?, ?>) v).entrySet()) {
+                if (!first) sb.append(',');
+                appendJsonString(sb, String.valueOf(e.getKey()));
+                sb.append(':');
+                appendJson(sb, e.getValue());
+                first = false;
+            }
+            sb.append('}');
+            return;
+        }
+        if (v instanceof Iterable) {
+            sb.append('[');
+            boolean first = true;
+            for (Object it : (Iterable<?>) v) {
+                if (!first) sb.append(',');
+                appendJson(sb, it);
+                first = false;
+            }
+            sb.append(']');
+            return;
+        }
+        appendJsonString(sb, v.toString());
+    }
+
+    private static void appendJsonString(StringBuilder sb, String s) {
+        sb.append('"');
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"':  sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                case '\b': sb.append("\\b"); break;
+                case '\f': sb.append("\\f"); break;
+                default:
+                    if (c < 0x20) {
+                        sb.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+            }
+        }
+        sb.append('"');
+    }
+
+    /**
+     * Send a JSON response with application/json Content-Type and the size
+     * cap from sendResponse. The body argument is written verbatim — build
+     * it with toJson().
+     */
+    public static void sendJson(HttpExchange exchange, String jsonBody) throws IOException {
+        byte[] bytes = (jsonBody == null ? "{}" : jsonBody).getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > MAX_RESPONSE_BYTES) {
+            // For JSON we can't splice a suffix in the middle without breaking
+            // the structure. Instead replace with a single error document.
+            String err = "{\"error\":\"response exceeded " + MAX_RESPONSE_BYTES
+                + " bytes (" + bytes.length + "); narrow your query\"}";
+            bytes = err.getBytes(StandardCharsets.UTF_8);
+        }
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        exchange.sendResponseHeaders(200, bytes.length);
+        try (OutputStream os = exchange.getResponseBody()) {
+            os.write(bytes);
+        }
+    }
+
+    /**
      * Block on a CompletableFuture with the default async timeout. Used by
      * debugger endpoints where the underlying API is async (GDB/dbgeng comms).
      */

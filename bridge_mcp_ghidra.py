@@ -344,6 +344,16 @@ def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
     return safe_get("function_xrefs", {"name": name, "offset": offset, "limit": limit})
 
 @mcp.tool()
+def get_function_info(address: str) -> str:
+    """Structured JSON description of the function at or containing `address`.
+    Includes name, signature, body range, size, is_thunk/inline/external
+    flags, calling_convention, params with types & storage, locals, callees
+    and callers (flat, one BFS level — deeper via get_callees_recursive),
+    and tags. Use this instead of decompile when you need graph metadata
+    without re-parsing text."""
+    return "\n".join(safe_get("get_function_info", {"address": address}))
+
+@mcp.tool()
 def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list:
     """
     List all defined strings in the program with their addresses.

@@ -344,6 +344,11 @@ public class GhidraMCPPlugin extends Plugin {
             Util.sendResponse(exchange, getFunctionXrefs(name, offset, limit));
         });
 
+        server.createContext("/get_function_info", exchange -> {
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            Util.sendJson(exchange, buildFunctionInfoJson(qparams.get("address")));
+        });
+
         server.createContext("/strings", exchange -> {
             Map<String, String> qparams = Util.parseQueryParams(exchange);
             int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
@@ -919,6 +924,92 @@ public class GhidraMCPPlugin extends Plugin {
      * Gets a function at the given address or containing the address
      * @return the function or null if not found
      */
+    /**
+     * Emit a structured JSON description of a function. Agent-first: exposes
+     * the same data as the text endpoints (name, signature, body) plus the
+     * graph/metadata that agents keep having to re-derive from text —
+     * callees, callers, parameters with types, locals, calling convention,
+     * tags, thunk/inline flags. Keeps callees/callers flat (one BFS level)
+     * to stay bounded; deeper traversal is /get_callees_recursive territory.
+     */
+    private String buildFunctionInfoJson(String addressStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "{\"error\":\"No program loaded\"}";
+        if (addressStr == null || addressStr.isEmpty()) return "{\"error\":\"address is required\"}";
+
+        Map<String, Object> info = new LinkedHashMap<>();
+        try {
+            Address addr = program.getAddressFactory().getAddress(addressStr);
+            if (addr == null) return "{\"error\":\"invalid address: " + addressStr + "\"}";
+            Function func = getFunctionForAddress(program, addr);
+            if (func == null) return "{\"error\":\"no function at or containing " + addressStr + "\"}";
+
+            info.put("name", func.getName());
+            info.put("entry", func.getEntryPoint().toString());
+            try { info.put("signature", func.getSignature().getPrototypeString()); } catch (Exception ignore) {}
+            info.put("body_start", func.getBody().getMinAddress().toString());
+            info.put("body_end", func.getBody().getMaxAddress().toString());
+            info.put("size", func.getBody().getNumAddresses());
+            info.put("is_thunk", func.isThunk());
+            info.put("is_inline", func.isInline());
+            info.put("is_external", func.isExternal());
+            try { info.put("calling_convention", func.getCallingConventionName()); } catch (Exception ignore) {}
+            if (func.isThunk()) {
+                Function th = func.getThunkedFunction(true);
+                if (th != null) info.put("thunked_function", th.getName() + "@" + th.getEntryPoint());
+            }
+
+            List<Map<String, Object>> params = new ArrayList<>();
+            for (Parameter p : func.getParameters()) {
+                Map<String, Object> pi = new LinkedHashMap<>();
+                pi.put("name", p.getName());
+                pi.put("type", p.getDataType() != null ? p.getDataType().getName() : "(unknown)");
+                pi.put("storage", p.getVariableStorage().toString());
+                params.add(pi);
+            }
+            info.put("params", params);
+
+            List<Map<String, Object>> locals = new ArrayList<>();
+            for (Variable v : func.getLocalVariables()) {
+                Map<String, Object> vi = new LinkedHashMap<>();
+                vi.put("name", v.getName());
+                vi.put("type", v.getDataType() != null ? v.getDataType().getName() : "(unknown)");
+                vi.put("storage", v.getVariableStorage().toString());
+                locals.add(vi);
+            }
+            info.put("locals", locals);
+
+            ConsoleTaskMonitor monitor = new ConsoleTaskMonitor();
+            List<String> callees = new ArrayList<>();
+            for (Function c : func.getCalledFunctions(monitor)) {
+                callees.add(c.getName() + "@" + c.getEntryPoint());
+            }
+            Collections.sort(callees);
+            info.put("callees", callees);
+
+            List<String> callers = new ArrayList<>();
+            for (Function c : func.getCallingFunctions(monitor)) {
+                callers.add(c.getName() + "@" + c.getEntryPoint());
+            }
+            Collections.sort(callers);
+            info.put("callers", callers);
+
+            List<String> tags = new ArrayList<>();
+            try {
+                for (Object t : func.getTags()) {
+                    tags.add(t.toString());
+                }
+            } catch (Exception ignore) {}
+            info.put("tags", tags);
+
+            return Util.toJson(info);
+        } catch (Exception e) {
+            return "{\"error\":\"" + e.getClass().getSimpleName() + ": "
+                + (e.getMessage() == null ? "" : e.getMessage().replace("\"", "'"))
+                + "\"}";
+        }
+    }
+
     private Function getFunctionForAddress(Program program, Address addr) {
         Function func = program.getFunctionManager().getFunctionAt(addr);
         if (func == null) {
