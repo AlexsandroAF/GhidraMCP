@@ -203,9 +203,16 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
     private interface BoolAction { boolean run(); }
 
     private String runBool(String label, BoolAction action) {
-        if (api.getCurrentTrace() == null) return "No active debug session";
+        Trace trace = api.getCurrentTrace();
+        if (trace == null) return "No active debug session";
         try {
-            return action.run() ? (label + ": ok") : (label + ": failed");
+            boolean ok = action.run();
+            // Force the Trace view to catch up with backend state before this
+            // response returns. Without it, a /state call issued immediately
+            // after stepInto still reports the pre-step PC because the async
+            // update hadn't landed yet.
+            try { api.flushAsyncPipelines(trace); } catch (Exception ignore) {}
+            return ok ? (label + ": ok") : (label + ": failed");
         } catch (Exception e) {
             return label + " error: " + e.getMessage();
         }
