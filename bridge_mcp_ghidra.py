@@ -579,10 +579,14 @@ def dbg_list_frames() -> str:
     return "\n".join(safe_get_dbg("dbg/list_frames"))
 
 @mcp.tool()
-def dbg_read_registers() -> list:
-    """Dump all registers of the current platform/thread/frame as
-    `name: 0xvalue` lines."""
-    return safe_get_dbg("dbg/read_registers")
+def dbg_read_registers(filter: str = "general") -> list:
+    """Dump registers of the current platform/thread/frame as `name: 0xvalue`
+    lines. `filter` restricts what comes back:
+      - "general" (default): RAX/RBX/RIP/RFLAGS/segment regs (~20 lines x86_64)
+      - "float": x87 ST*, MMX MM*, FPU control
+      - "vector": XMM/YMM/ZMM + K mask registers
+      - "all": everything the platform declares (can be 200+ lines)"""
+    return safe_get_dbg("dbg/read_registers", {"filter": filter})
 
 @mcp.tool()
 def dbg_read_memory(address: str, length: int = 16, format: str = "hex") -> str:

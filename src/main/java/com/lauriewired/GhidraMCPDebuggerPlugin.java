@@ -129,7 +129,10 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
         server.createContext("/dbg/state",           exchange -> Util.sendResponse(exchange, getStateString()));
         server.createContext("/dbg/list_threads",    exchange -> Util.sendResponse(exchange, listThreadsString()));
         server.createContext("/dbg/list_frames",     exchange -> Util.sendResponse(exchange, listFramesString()));
-        server.createContext("/dbg/read_registers", exchange -> Util.sendResponse(exchange, readRegistersString()));
+        server.createContext("/dbg/read_registers", exchange -> {
+            var q = Util.parseQueryParams(exchange);
+            Util.sendResponse(exchange, readRegistersString(q.get("filter")));
+        });
 
         // ---- Memory + register write ----
         server.createContext("/dbg/read_memory", exchange -> {
@@ -280,15 +283,39 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
             pc != null ? pc.toString() : "(unknown)");
     }
 
-    private String readRegistersString() {
+    /**
+     * Classify a register by name into general / float / vector. Heuristic:
+     * XMM, YMM, ZMM and K* are SIMD/mask (vector); ST, MM and FPR prefixes
+     * are x87/MMX (float); everything else is treated as general purpose
+     * (RAX, RBX, RIP, RFLAGS, segment regs, etc). Good enough for x86/x64;
+     * agents can always request filter=all to get the full dump.
+     */
+    private static String regCategory(String name) {
+        String u = name.toUpperCase();
+        if (u.startsWith("XMM") || u.startsWith("YMM") || u.startsWith("ZMM")
+                || (u.length() == 2 && u.charAt(0) == 'K' && Character.isDigit(u.charAt(1)))) {
+            return "vector";
+        }
+        if (u.startsWith("ST") || u.startsWith("MM") || u.startsWith("FPR")
+                || u.equals("FPCW") || u.equals("FPSW") || u.equals("FPTW")) {
+            return "float";
+        }
+        return "general";
+    }
+
+    private String readRegistersString(String filter) {
         Trace trace = api.getCurrentTrace();
         if (trace == null) return "No active debug session";
         try {
             TracePlatform plat = api.getCurrentPlatform();
             if (plat == null) return "No current platform";
+            String f = (filter == null || filter.isEmpty()) ? "general" : filter.toLowerCase();
             List<String> names = plat.getLanguage().getRegisters().stream()
                 .map(Register::getName)
+                .filter(n -> f.equals("all") || f.equals(regCategory(n)))
                 .collect(Collectors.toList());
+            if (names.isEmpty()) return "No registers match filter=" + f
+                + " (try filter=general|float|vector|all)";
             List<RegisterValue> vals = api.readRegistersNamed(names);
             StringBuilder sb = new StringBuilder();
             for (RegisterValue rv : vals) {
