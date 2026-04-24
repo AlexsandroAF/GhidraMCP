@@ -349,6 +349,11 @@ public class GhidraMCPPlugin extends Plugin {
             Util.sendJson(exchange, buildFunctionInfoJson(qparams.get("address")));
         });
 
+        server.createContext("/get_instruction_info", exchange -> {
+            Map<String, String> qparams = Util.parseQueryParams(exchange);
+            Util.sendJson(exchange, buildInstructionInfoJson(qparams.get("address")));
+        });
+
         server.createContext("/strings", exchange -> {
             Map<String, String> qparams = Util.parseQueryParams(exchange);
             int offset = Util.parseIntOrDefault(qparams.get("offset"), 0);
@@ -1001,6 +1006,76 @@ public class GhidraMCPPlugin extends Plugin {
                 }
             } catch (Exception ignore) {}
             info.put("tags", tags);
+
+            return Util.toJson(info);
+        } catch (Exception e) {
+            return "{\"error\":\"" + e.getClass().getSimpleName() + ": "
+                + (e.getMessage() == null ? "" : e.getMessage().replace("\"", "'"))
+                + "\"}";
+        }
+    }
+
+    /**
+     * Structured JSON for a single instruction. Gives the agent everything
+     * Ghidra's Instruction model knows without forcing a text re-parse.
+     */
+    private String buildInstructionInfoJson(String addressStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "{\"error\":\"No program loaded\"}";
+        if (addressStr == null || addressStr.isEmpty()) return "{\"error\":\"address is required\"}";
+        try {
+            Address addr = program.getAddressFactory().getAddress(addressStr);
+            if (addr == null) return "{\"error\":\"invalid address: " + addressStr + "\"}";
+            Instruction instr = program.getListing().getInstructionAt(addr);
+            if (instr == null) {
+                instr = program.getListing().getInstructionContaining(addr);
+                if (instr == null) return "{\"error\":\"no instruction at or containing " + addressStr + "\"}";
+            }
+            Map<String, Object> info = new LinkedHashMap<>();
+            info.put("address", instr.getAddress().toString());
+            info.put("mnemonic", instr.getMnemonicString());
+            info.put("length", instr.getLength());
+            info.put("flow_type", instr.getFlowType() != null ? instr.getFlowType().toString() : null);
+            Address ft = instr.getFallThrough();
+            info.put("fall_through", ft != null ? ft.toString() : null);
+            Address dft = instr.getDefaultFallThrough();
+            info.put("default_fall_through", dft != null ? dft.toString() : null);
+
+            byte[] bytes;
+            try { bytes = instr.getBytes(); } catch (Exception e) { bytes = new byte[0]; }
+            StringBuilder hex = new StringBuilder(bytes.length * 2);
+            for (byte b : bytes) hex.append(String.format("%02x", b & 0xFF));
+            info.put("bytes", hex.toString());
+
+            List<Map<String, Object>> operands = new ArrayList<>();
+            for (int i = 0; i < instr.getNumOperands(); i++) {
+                Map<String, Object> op = new LinkedHashMap<>();
+                op.put("index", i);
+                op.put("repr", instr.getDefaultOperandRepresentation(i));
+                try { op.put("type_flags", instr.getOperandType(i)); } catch (Exception ignore) {}
+                List<String> objs = new ArrayList<>();
+                try {
+                    for (Object o : instr.getOpObjects(i)) objs.add(String.valueOf(o));
+                } catch (Exception ignore) {}
+                op.put("objects", objs);
+                operands.add(op);
+            }
+            info.put("operands", operands);
+
+            List<String> inputs = new ArrayList<>();
+            try { for (Object o : instr.getInputObjects()) inputs.add(String.valueOf(o)); } catch (Exception ignore) {}
+            info.put("inputs", inputs);
+
+            List<String> results = new ArrayList<>();
+            try { for (Object o : instr.getResultObjects()) results.add(String.valueOf(o)); } catch (Exception ignore) {}
+            info.put("outputs", results);
+
+            List<String> pcodeLines = new ArrayList<>();
+            try {
+                ghidra.program.model.pcode.PcodeOp[] ops = instr.getPcode();
+                if (ops != null) for (ghidra.program.model.pcode.PcodeOp op : ops) pcodeLines.add(op.toString());
+            } catch (Exception ignore) {}
+            info.put("pcode", pcodeLines);
 
             return Util.toJson(info);
         } catch (Exception e) {

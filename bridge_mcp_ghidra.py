@@ -344,6 +344,16 @@ def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
     return safe_get("function_xrefs", {"name": name, "offset": offset, "limit": limit})
 
 @mcp.tool()
+def get_instruction_info(address: str) -> str:
+    """Structured JSON for a single instruction. Fields: address, mnemonic,
+    length, bytes (hex), flow_type (CALL/JUMP/RETURN/etc), fall_through,
+    default_fall_through, operands (each: index, repr, type_flags, objects),
+    inputs/outputs (registers and memory referenced), pcode (list of raw
+    p-code ops). Use this instead of disassemble_function when you only
+    need one instruction."""
+    return "\n".join(safe_get("get_instruction_info", {"address": address}))
+
+@mcp.tool()
 def get_function_info(address: str) -> str:
     """Structured JSON description of the function at or containing `address`.
     Includes name, signature, body range, size, is_thunk/inline/external
