@@ -255,17 +255,28 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
                 }
             } catch (Exception ignore) {}
 
+            long snapBefore = -1;
+            try { snapBefore = api.getCurrentSnap(); } catch (Exception ignore) {}
             boolean ok = action.run();
-            // flushAsyncPipelines + waitForBreak together: the flush forces
-            // queued updates to land, waitForBreak pauses until the trace
-            // reports STOPPED again. Without the wait, a fast read can race
-            // the coordinate update and see the pre-step snap (reproduced
-            // deterministically on alternating steps against a dbgeng target).
+            // dbgeng steps land asynchronously in the Trace: flushAsyncPipelines
+            // schedules updates, waitForBreak detects the RUNNING→STOPPED edge,
+            // but the Trace's currentSnap only increments when the resulting
+            // snapshot is fully committed. Poll for that explicitly so we
+            // don't race the update. Bounded at ~2s.
             try { api.flushAsyncPipelines(trace); } catch (Exception ignore) {}
             try {
                 api.waitForBreak(trace, 2, java.util.concurrent.TimeUnit.SECONDS);
-            } catch (Exception ignore) { /* timeout or already stopped — proceed */ }
-            try { api.flushAsyncPipelines(trace); } catch (Exception ignore) {}
+            } catch (Exception ignore) { /* timeout or already stopped */ }
+            if (snapBefore >= 0) {
+                long deadline = System.currentTimeMillis() + 2000;
+                while (System.currentTimeMillis() < deadline) {
+                    long cur;
+                    try { cur = api.getCurrentSnap(); } catch (Exception e) { break; }
+                    if (cur > snapBefore) break;
+                    try { api.flushAsyncPipelines(trace); } catch (Exception ignore) {}
+                    try { Thread.sleep(25); } catch (InterruptedException ignore) { break; }
+                }
+            }
 
             Address afterPc = null;
             try {
