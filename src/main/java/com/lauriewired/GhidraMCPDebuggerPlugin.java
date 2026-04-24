@@ -5,6 +5,7 @@ import com.sun.net.httpserver.HttpServer;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.plugin.core.debug.DebuggerPluginPackage;
 import ghidra.app.script.GhidraState;
+import ghidra.app.services.DebuggerTraceManagerService;
 import ghidra.app.services.ProgramManager;
 import ghidra.app.services.TraceRmiLauncherService;
 import ghidra.debug.api.ValStr;
@@ -615,13 +616,30 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
     private String disconnectSession() {
         Trace trace = api.getCurrentTrace();
         if (trace == null) return "No active debug session";
+        StringBuilder warn = new StringBuilder();
+        // Kill is a best-effort — some backends raise if the target already
+        // exited. Keep going and still close the trace either way.
         try {
             api.kill();
-            try { api.closeTrace(trace); } catch (Exception ignore) {}
-            return "Session terminated (kill + closeTrace)";
         } catch (Exception e) {
-            return "Disconnect error: " + e.getMessage();
+            warn.append("kill raised: ").append(e.getMessage()).append("; ");
         }
+        // closeTrace(Trace) on FlatDebuggerAPI shows a modal dialog if the
+        // trace has unsaved changes; closeTraceNoConfirm skips it and actually
+        // detaches the trace from the tool so the next /state returns "No
+        // active debug session".
+        DebuggerTraceManagerService traceMgr = tool.getService(DebuggerTraceManagerService.class);
+        try {
+            if (traceMgr != null) {
+                traceMgr.closeTraceNoConfirm(trace);
+            } else {
+                api.closeTrace(trace);
+            }
+        } catch (Exception e) {
+            return "Session killed but trace close failed: " + e.getMessage();
+        }
+        String suffix = warn.length() > 0 ? (" (warn: " + warn + ")") : "";
+        return "Session terminated" + suffix;
     }
 
     @Override
