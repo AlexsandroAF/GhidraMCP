@@ -1561,6 +1561,33 @@ public class GhidraMCPPlugin extends Plugin {
      * @return The resolved DataType, or null if not found
      */
     private DataType resolveDataType(DataTypeManager dtm, String typeName) {
+        if (typeName == null) return null;
+        String trimmed = typeName.trim();
+
+        // C-style pointer suffixes: "char*", "int **", "void *". Count the
+        // trailing asterisks (spaces allowed), strip them, recurse on the
+        // base, then wrap N times. Handled before exact-match so typedefs
+        // that happen to end in '*' don't short-circuit.
+        int stars = 0;
+        int end = trimmed.length();
+        while (end > 0) {
+            char c = trimmed.charAt(end - 1);
+            if (c == '*') { stars++; end--; }
+            else if (c == ' ' || c == '\t') { end--; }
+            else break;
+        }
+        if (stars > 0 && end > 0) {
+            String base = trimmed.substring(0, end).trim();
+            DataType baseDt = resolveDataType(dtm, base);
+            if (baseDt == null) return null;
+            DataType ptr = baseDt;
+            for (int i = 0; i < stars; i++) ptr = new PointerDataType(ptr);
+            return ptr;
+        }
+
+        // From here on, operate on the trimmed form.
+        typeName = trimmed;
+
         // First try to find exact match in all categories
         DataType dataType = findDataTypeByNameInAllCategories(dtm, typeName);
         if (dataType != null) {
