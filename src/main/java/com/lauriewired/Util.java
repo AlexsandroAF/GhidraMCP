@@ -95,6 +95,24 @@ public final class Util {
         return Math.min(v, MAX_LIMIT);
     }
 
+    /**
+     * Drop the "/ * WARNING: ... * /" header comments that Ghidra's decompiler
+     * prepends for injections, analysis hints and guesses. They pollute the
+     * output and an LLM agent cannot act on them anyway. Matches any line
+     * whose trimmed content opens with the warning marker.
+     */
+    public static String stripDecompileWarnings(String input) {
+        if (input == null || input.isEmpty()) return input;
+        StringBuilder out = new StringBuilder(input.length());
+        for (String line : input.split("\n", -1)) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("/* WARNING:")) continue;
+            if (out.length() > 0) out.append('\n');
+            out.append(line);
+        }
+        return out.toString();
+    }
+
     public static String escapeNonAscii(String input) {
         if (input == null) return "";
         StringBuilder sb = new StringBuilder();

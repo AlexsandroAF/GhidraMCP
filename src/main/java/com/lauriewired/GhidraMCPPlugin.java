@@ -629,7 +629,7 @@ public class GhidraMCPPlugin extends Plugin {
                     DecompileResults result =
                         decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
                     if (result != null && result.decompileCompleted()) {
-                        return result.getDecompiledFunction().getC();
+                        return Util.stripDecompileWarnings(result.getDecompiledFunction().getC());
                     } else {
                         return "Decompilation failed";
                     }
@@ -946,7 +946,7 @@ public class GhidraMCPPlugin extends Plugin {
                 DecompileResults result = decomp.decompileFunction(func, 30, new ConsoleTaskMonitor());
 
                 return (result != null && result.decompileCompleted())
-                    ? result.getDecompiledFunction().getC()
+                    ? Util.stripDecompileWarnings(result.getDecompiledFunction().getC())
                     : "Decompilation failed";
             } finally {
                 decomp.dispose();
@@ -1983,9 +1983,14 @@ public class GhidraMCPPlugin extends Plugin {
                 String s = tok.getText();
                 if (s != null) text.append(s);
             }
+            String body = text.toString();
+            // Same WARNING filter we apply to plain-text decompiles: strip
+            // Ghidra's injection/hint notes so the agent doesn't see them as
+            // actual code lines with their own addresses.
+            if (body.trim().startsWith("/* WARNING:")) continue;
             out.append(minAddr != null ? minAddr.toString() : "        ")
                .append(" | ")
-               .append(text)
+               .append(body)
                .append('\n');
         }
         return out.toString();
