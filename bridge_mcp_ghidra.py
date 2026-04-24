@@ -344,6 +344,18 @@ def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
     return safe_get("function_xrefs", {"name": name, "offset": offset, "limit": limit})
 
 @mcp.tool()
+def search_bytes(pattern: str, segment: str = None, limit: int = 100) -> list:
+    """Scan memory for a byte pattern. `pattern` is space-separated hex pairs
+    where `??` means any byte. Examples: "48 8b ?? c3" (x64 prologue tail),
+    "cc cc cc" (padding). `segment` restricts the search to a single
+    MemoryBlock name; default scans every initialized readable block.
+    Returns one line per match: `ADDRESS (segment_name)`."""
+    params = {"pattern": pattern, "limit": limit}
+    if segment:
+        params["segment"] = segment
+    return safe_get("search_bytes", params)
+
+@mcp.tool()
 def get_function_cfg(address: str) -> str:
     """Control flow graph of the function at `address` as JSON. Returns
     {function, entry, blocks_count, edges_count, blocks:[{start,end,name,

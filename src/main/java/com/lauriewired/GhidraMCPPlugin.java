@@ -3,6 +3,8 @@ package com.lauriewired;
 import ghidra.framework.plugintool.Plugin;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressRange;
+import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.GlobalNamespace;
 import ghidra.program.model.block.BasicBlockModel;
 import ghidra.program.model.block.CodeBlock;
@@ -357,6 +359,12 @@ public class GhidraMCPPlugin extends Plugin {
         server.createContext("/get_instruction_info", exchange -> {
             Map<String, String> qparams = Util.parseQueryParams(exchange);
             Util.sendJson(exchange, buildInstructionInfoJson(qparams.get("address")));
+        });
+
+        server.createContext("/search_bytes", exchange -> {
+            Map<String, String> q = Util.parseQueryParams(exchange);
+            int limit = Util.parseLimitOrDefault(q.get("limit"), 100);
+            Util.sendResponse(exchange, searchBytes(q.get("pattern"), q.get("segment"), limit));
         });
 
         server.createContext("/get_function_cfg", exchange -> {
@@ -968,6 +976,79 @@ public class GhidraMCPPlugin extends Plugin {
      * Gets a function at the given address or containing the address
      * @return the function or null if not found
      */
+    /**
+     * Byte-pattern search with wildcard support. Pattern is space-separated
+     * hex pairs; "??" (or "**") stands for "any byte". Example:
+     *   "48 8b ?? c3"  — MOV reg, [reg+?]; RET
+     * If segment is given, search is restricted to that MemoryBlock; else
+     * every readable block is scanned. Returns one match per line:
+     *   ADDRESS (segment_name)
+     */
+    private String searchBytes(String pattern, String segment, int limit) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (pattern == null || pattern.isEmpty()) return "pattern is required";
+        if (limit < 1) limit = 1;
+
+        String[] tokens = pattern.trim().split("\\s+");
+        if (tokens.length == 0) return "empty pattern";
+        byte[] bytes = new byte[tokens.length];
+        byte[] mask = new byte[tokens.length];
+        try {
+            for (int i = 0; i < tokens.length; i++) {
+                String t = tokens[i];
+                if (t.length() != 2) return "Token '" + t + "' must be exactly 2 chars (hex pair or '??')";
+                if (t.equals("??") || t.equals("**")) {
+                    bytes[i] = 0;
+                    mask[i] = 0;
+                } else {
+                    bytes[i] = (byte) Integer.parseInt(t, 16);
+                    mask[i] = (byte) 0xFF;
+                }
+            }
+        } catch (NumberFormatException e) {
+            return "Invalid hex in pattern: " + e.getMessage();
+        }
+
+        Memory mem = program.getMemory();
+        AddressSet searchRange = new AddressSet();
+        if (segment != null && !segment.isEmpty()) {
+            MemoryBlock blk = mem.getBlock(segment);
+            if (blk == null) return "Segment not found: " + segment;
+            searchRange.add(blk.getStart(), blk.getEnd());
+        } else {
+            for (MemoryBlock blk : mem.getBlocks()) {
+                if (blk.isRead() && blk.isInitialized()) {
+                    searchRange.add(blk.getStart(), blk.getEnd());
+                }
+            }
+        }
+
+        List<String> results = new ArrayList<>();
+        TaskMonitor monitor = TaskMonitor.DUMMY;
+
+        for (AddressRange range : searchRange) {
+            if (results.size() >= limit) break;
+            Address cursor = range.getMinAddress();
+            Address end = range.getMaxAddress();
+            while (cursor != null && cursor.compareTo(end) <= 0 && results.size() < limit) {
+                Address found;
+                try {
+                    found = mem.findBytes(cursor, end, bytes, mask, true, monitor);
+                } catch (Exception e) {
+                    break;
+                }
+                if (found == null) break;
+                MemoryBlock blk = mem.getBlock(found);
+                results.add(found.toString() + (blk != null ? " (" + blk.getName() + ")" : ""));
+                try { cursor = found.add(1); } catch (Exception e) { break; }
+            }
+        }
+
+        if (results.isEmpty()) return "No matches";
+        return String.join("\n", results);
+    }
+
     /**
      * Control flow graph of a function as JSON: list of basic blocks with
      * their address ranges and instruction counts, plus an edge list with
