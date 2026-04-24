@@ -223,20 +223,34 @@ public class GhidraMCPDebuggerPlugin extends Plugin {
         Trace trace = api.getCurrentTrace();
         if (trace == null) return "No active debug session";
         try {
+            // Reading PC through the current DebuggerCoordinates forces the
+            // value to come from the active thread+snap, not a cached initial
+            // frame. Without this a /state issued right after /step_into kept
+            // reporting the pre-step PC.
+            var coords = api.getCurrentDebuggerCoordinates();
             TraceExecutionState state = api.getExecutionState(trace);
             TraceThread thread = api.getCurrentThread();
-            Address pc = api.getProgramCounter();
+            long snap = api.getCurrentSnap();
+            Address pc = coords != null ? api.getProgramCounter(coords) : api.getProgramCounter();
             StringBuilder sb = new StringBuilder();
             sb.append("execution_state: ").append(state).append('\n');
             sb.append("trace: ").append(trace.getName()).append('\n');
-            sb.append("thread: ").append(thread != null ? thread.getName(api.getCurrentSnap()) : "(none)").append('\n');
+            sb.append("thread: ").append(thread != null ? thread.getName(snap) : "(none)").append('\n');
             sb.append("thread_id: ").append(thread != null ? thread.getKey() : -1).append('\n');
             sb.append("pc: ").append(pc != null ? pc.toString() : "(unknown)").append('\n');
             sb.append("frame: ").append(api.getCurrentFrame()).append('\n');
-            sb.append("snap: ").append(api.getCurrentSnap()).append('\n');
+            sb.append("snap: ").append(snap).append('\n');
             sb.append("target_alive: ").append(api.isTargetAlive());
             return sb.toString();
         } catch (Exception e) {
+            // After /dbg/disconnect the Trace reference survives briefly but
+            // any backend-touching call raises TraceRmiError: "Socket closed".
+            // Report that as a clean "no session" instead of a stack-ish error.
+            String msg = e.getMessage() == null ? "" : e.getMessage();
+            if (msg.contains("Socket closed") || msg.contains("TraceRmiError")
+                    || e.getClass().getSimpleName().contains("TraceRmiError")) {
+                return "No active debug session (trace terminated)";
+            }
             return "Error: " + e.getMessage();
         }
     }
